@@ -1,0 +1,2674 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:incident_reporting_frontend/screens/register_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../services/graphql_service.dart';
+import '../theme/ShiftStatus.dart';
+import '../utils/auth_utils.dart';
+import '../utils/graphql_query.dart';
+import '../theme/app_theme.dart';
+import 'user_management_screen.dart';
+import 'police_station_management_screen.dart';
+
+// ============================================================================
+// MODERN INCIDENT DASHBOARD - Complete Version
+// ============================================================================
+
+class DashboardScreen extends StatefulWidget {
+  @override
+  _DashboardScreenState createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> with TickerProviderStateMixin {
+
+  // ============================================================================
+  // STATE VARIABLES
+  // ============================================================================
+
+  // User Data
+  String? _userRole;
+  String? _userUid;
+  String? _userName;
+  String? _userPhone;
+  String? _stationName;
+  String? _stationUid;
+  String? _badgeNumber;
+  String? _rank;
+  String? _officerUid;
+  bool? _isOnDuty;
+  Map<String, dynamic>? _currentShift;
+
+  // Shifts Data
+  List<Map<String, dynamic>> _officerShifts = [];
+  bool _isLoadingShifts = false;
+
+  // Location & Nearby Stations
+  Position? _currentPosition;
+  String? _currentLocationName;
+  List<Map<String, dynamic>> _nearbyStations = [];
+  bool _isLoadingNearbyStations = false;
+  double _maxDistance = 100.0;
+
+  // UI State
+  bool _isLoading = true;
+  bool _balanceVisible = false;
+
+  // Scaffold key for drawer
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+
+  // Animations
+  late AnimationController _animationController;
+  late AnimationController _stationsLoadingController;
+  late Animation<double> _fadeAnimation;
+  late Animation<double> _pulseAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializeAnimations();
+    _loadUserData();
+  }
+
+  @override
+  void dispose() {
+    _animationController.dispose();
+    _stationsLoadingController.dispose();
+    super.dispose();
+  }
+
+  // ============================================================================
+  // INITIALIZATION
+  // ============================================================================
+
+  void _initializeAnimations() {
+    _animationController = AnimationController(
+      duration: Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _stationsLoadingController = AnimationController(
+      duration: Duration(milliseconds: 1500),
+      vsync: this,
+    )..repeat(reverse: true);
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
+    _pulseAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
+      CurvedAnimation(parent: _stationsLoadingController, curve: Curves.easeInOut),
+    );
+
+    _animationController.forward();
+  }
+
+  // ============================================================================
+  // DATA LOADING
+  // ============================================================================
+
+  Future<void> _loadUserData() async {
+    setState(() => _isLoading = true);
+    try {
+      await Future.wait([_loadRole(), _loadUserProfile()]);
+      if (_userRole == "POLICE_OFFICER" && _officerUid != null) {
+        await _fetchOfficerShifts();
+      }
+    } catch (e) {
+      _showSnackBar('Failed to load data: $e', isError: true);
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadRole() async {
+    final role = await getUserRoleFromToken();
+    setState(() => _userRole = role);
+  }
+
+  Future<void> _loadUserProfile() async {
+    final gql = GraphQLService();
+    final response = await gql.sendAuthenticatedQuery(meQuery, {});
+    final user = response['data']?['me']?['data'];
+
+    if (user != null) {
+      setState(() {
+        _userName = user['name'];
+        _userPhone = user['phoneNumber'];
+        _userRole = user['role'];
+        _stationName = user['stationName'];
+        _stationUid = user['stationUid'];
+        _badgeNumber = user['badgeNumber'];
+        _rank = user['rank'];
+        _isOnDuty = user['isOnDuty'];
+        _currentShift = user['currentShift'];
+        _officerUid = user['officerUid'];
+        _userUid = user['uid'];
+      });
+
+      if (_stationUid == null && (_userRole == "STATION_ADMIN" || _userRole == "ROOT")) {
+        final stationResponse = await gql.sendAuthenticatedQuery(getStationsByAdminQuery, {});
+        final stations = stationResponse['data']?['getStationsByAdmin']?['data'];
+        if (stations != null && stations.isNotEmpty) {
+          setState(() {
+            _stationUid = stations[0]['uid'];
+            _stationName = stations[0]['name'] ?? _stationName;
+          });
+        }
+      }
+    }
+  }
+
+  Future<void> _fetchOfficerShifts() async {
+    if (_officerUid == null) return;
+
+    setState(() => _isLoadingShifts = true);
+    try {
+      final gql = GraphQLService();
+      final response = await gql.sendAuthenticatedQuery(
+        getShiftsByOfficerQuery,
+        {'officerUid': _officerUid, 'page': 0, 'size': 10},
+      );
+
+      if (response.containsKey('errors')) return;
+
+      final shifts = response['data']?['getShiftsByPoliceOfficer']?['data'] as List<dynamic>?;
+      if (shifts != null) {
+        setState(() => _officerShifts = shifts.cast<Map<String, dynamic>>());
+      }
+    } catch (e) {
+      _showSnackBar('Failed to load shifts', isError: true);
+    } finally {
+      setState(() => _isLoadingShifts = false);
+    }
+  }
+
+  // ============================================================================
+  // LOCATION & NEARBY STATIONS
+  // ============================================================================
+
+  Future<void> _getCurrentLocation() async {
+    try {
+      LocationPermission permission = await Geolocator.checkPermission();
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+        if (permission == LocationPermission.denied) {
+          Navigator.of(context).pop();
+          _showSnackBar('Location permission required', isError: true);
+          return;
+        }
+      }
+
+      Position position = await Geolocator.getCurrentPosition();
+      setState(() => _currentPosition = position);
+
+      await _getLocationName(position.latitude, position.longitude);
+      await _fetchNearbyPoliceStations(position.latitude, position.longitude);
+    } catch (e) {
+      Navigator.of(context).pop();
+      _showSnackBar('Failed to get location', isError: true);
+    }
+  }
+
+  Future<void> _getLocationName(double latitude, double longitude) async {
+    try {
+      List<Placemark> placemarks = await placemarkFromCoordinates(latitude, longitude);
+      if (placemarks.isNotEmpty) {
+        final place = placemarks[0];
+        List<String> parts = [];
+
+        if (place.street?.isNotEmpty == true) parts.add(place.street!);
+        if (place.locality?.isNotEmpty == true) parts.add(place.locality!);
+
+        setState(() {
+          _currentLocationName = parts.isNotEmpty ? parts.join(', ') : 'Current Location';
+        });
+      }
+    } catch (e) {
+      setState(() => _currentLocationName = 'Current Location');
+    }
+  }
+
+  Future<void> _fetchNearbyPoliceStations(double latitude, double longitude) async {
+    try {
+      final gql = GraphQLService();
+      final response = await gql.sendAuthenticatedQuery(
+        getNearbyPoliceStationsQuery,
+        {
+          'latitude': latitude,
+          'longitude': longitude,
+          'maxDistance': _maxDistance,
+        },
+      );
+
+      if (response.containsKey('errors')) {
+        if (mounted) {
+          setState(() {
+            _isLoadingNearbyStations = false;
+            _nearbyStations = [];
+          });
+        }
+        _showSnackBar('Failed to load stations', isError: true);
+        return;
+      }
+
+      final stations = response['data']?['getNearbyPoliceStations']?['data'] as List<dynamic>?;
+
+      if (mounted) {
+        setState(() {
+          _nearbyStations = stations?.cast<Map<String, dynamic>>() ?? [];
+          _isLoadingNearbyStations = false;
+        });
+      }
+
+      print('✅ Loaded ${_nearbyStations.length} stations');
+
+    } catch (e) {
+      print('❌ Error loading stations: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingNearbyStations = false;
+          _nearbyStations = [];
+        });
+      }
+      _showSnackBar('Error: $e', isError: true);
+    }
+  }
+
+  // ============================================================================
+  // NAVIGATION
+  // ============================================================================
+
+  void _navigateToReportIncident() {
+    showDialog(
+      context: context,
+      barrierDismissible: true,
+      builder: (_) => _buildNearbyStationsDialog(),
+    );
+    _getCurrentLocation();
+  }
+
+  void _selectStationForReport(Map<String, dynamic> station) {
+    Navigator.of(context).pop();
+    _showSnackBar('Selected: ${station['name']}');
+  }
+
+  void _openUserManagement() {
+    if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => UserManagementScreen()));
+    }
+  }
+
+  void _openPoliceStationManagement() {
+    if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") {
+      Navigator.push(context, MaterialPageRoute(builder: (_) => PoliceStationManagementScreen()));
+    }
+  }
+
+  void _openProfile() {
+    _scaffoldKey.currentState?.openDrawer();
+  }
+
+  Future<void> _logout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.clear();
+    Navigator.pushReplacementNamed(context, '/');
+  }
+
+  // ============================================================================
+  // DELETE ACCOUNT - WEKA HAPA! 🎯
+  // ============================================================================
+
+  void _showDeleteAccountDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: AppTheme.errorRed.withOpacity(0.3),
+                blurRadius: 30,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Warning Icon
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  color: AppTheme.errorRed.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.warning_rounded,
+                  color: AppTheme.errorRed,
+                  size: 40,
+                ),
+              ),
+              SizedBox(height: 20),
+
+              Text(
+                'Delete Account?',
+                style: GoogleFonts.poppins(
+                  fontSize: 22,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+              SizedBox(height: 12),
+              Text(
+                'This action cannot be undone. All your data will be permanently deleted.',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: Color(0xFF8F9BB3),
+                  height: 1.5,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 24),
+
+              // Warning Points
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Color(0xFFFFF3CD),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Color(0xFFFFE69C)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    _buildWarningPoint('Your profile will be deleted'),
+                    _buildWarningPoint('All your incidents will be removed'),
+                    _buildWarningPoint('You cannot recover your account'),
+                  ],
+                ),
+              ),
+
+              SizedBox(height: 24),
+
+              // Buttons
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton(
+                      onPressed: () => Navigator.pop(context),
+                      style: OutlinedButton.styleFrom(
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        side: BorderSide(color: Color(0xFFE4E9F2)),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Cancel',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A1F36),
+                        ),
+                      ),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.pop(context);
+                        _deleteAccount();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppTheme.errorRed,
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        elevation: 0,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Delete',
+                        style: GoogleFonts.poppins(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteAccount() async {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => WillPopScope(
+        onWillPop: () async => false,
+        child: Center(
+          child: Container(
+            padding: EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircularProgressIndicator(strokeWidth: 3),
+                SizedBox(height: 16),
+                Text(
+                  'Deleting account...',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1F36),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final gql = GraphQLService();
+      final response = await gql.sendAuthenticatedQuery(deleteMyAccountMutation, {});
+
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      print('🔍 Delete Response: $response');
+
+      // Check for GraphQL errors
+      if (response.containsKey('errors')) {
+        final errorMessage = response['errors'][0]['message'] ?? 'Failed to delete account';
+        _showSnackBar(errorMessage, isError: true);
+        return;
+      }
+
+      final deleteResult = response['data']?['deleteMyAccount'];
+
+      if (deleteResult == null) {
+        _showSnackBar('Invalid response from server', isError: true);
+        return;
+      }
+
+      // 🔥 CHECK STATUS FIELD (not success field)
+      final status = deleteResult['status'];
+      final message = deleteResult['message'] ?? '';
+
+      if (status == "Success") {
+        print('✅ Account deleted successfully');
+
+        // 🔥 CLEAR DATA IMMEDIATELY
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.clear();
+        print('✅ Local data cleared');
+
+        // 🔥 NAVIGATE DIRECTLY - NO DIALOG
+        _navigateToRegisterScreen();
+
+      } else {
+        _showSnackBar(message.isNotEmpty ? message : 'Failed to delete account', isError: true);
+      }
+    } catch (e) {
+      print('❌ Delete Account Error: $e');
+
+      if (mounted) {
+        Navigator.of(context, rootNavigator: true).pop();
+      }
+
+      _showSnackBar('Error: ${e.toString()}', isError: true);
+    }
+  }
+
+// 🔥 SIMPLE NAVIGATION WITHOUT DIALOG
+  void _navigateToRegisterScreen() {
+    Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (context) => RegisterScreen()),
+          (route) => false,
+    );
+
+    // Optional: Show success message
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Account deleted successfully'),
+          backgroundColor: AppTheme.successGreen,
+          duration: Duration(seconds: 3),
+        ),
+      );
+    });
+  }
+
+  // ============================================================================
+  // UI HELPERS
+  // ============================================================================
+
+  void _showSnackBar(String message, {bool isError = false}) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: isError ? AppTheme.errorRed : AppTheme.successGreen,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        margin: EdgeInsets.all(16),
+      ),
+    );
+  }
+
+  String _getRoleDisplayName(String? role) {
+    switch (role) {
+      case "CITIZEN": return "Citizen";
+      case "ROOT": return "Admin";
+      case "POLICE_OFFICER": return "Officer";
+      case "STATION_ADMIN": return "Admin";
+      case "AGENCY_REP": return "Agency";
+      default: return "User";
+    }
+  }
+
+  Color _getStatusColor() {
+    if (_userRole == "POLICE_OFFICER") {
+      return _isOnDuty == true ? AppTheme.successGreen : AppTheme.errorRed;
+    }
+    return AppTheme.primaryBlue;
+  }
+
+  String _getStatusText() {
+    if (_userRole == "POLICE_OFFICER") {
+      return _isOnDuty == true ? "On Duty" : "Off Duty";
+    }
+    return "Active";
+  }
+
+  // ============================================================================
+  // BUILD METHOD
+  // ============================================================================
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading) return _buildLoadingScreen();
+
+    return Scaffold(
+      key: _scaffoldKey,
+      backgroundColor: Color(0xFFF5F7FA),
+      drawer: Drawer(
+        child: _buildProfileDrawer(),
+      ),
+      body: SafeArea(
+        child: RefreshIndicator(
+          onRefresh: _loadUserData,
+          child: Stack(
+            children: [
+              SingleChildScrollView(
+                physics: AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
+                child: FadeTransition(
+                  opacity: _fadeAnimation,
+                  // Update build method
+                  child: Column(
+                    children: [
+                      SizedBox(height: 280),
+                      if (_userRole == "POLICE_OFFICER")
+                        _buildShiftsSection()
+                      else if (_userRole == "STATION_ADMIN" || _userRole == "ROOT")
+                        _buildAdminSection()
+                      else if (_userRole == "CITIZEN")
+                          _buildCitizenContent(),
+                      SizedBox(height: 150),
+                    ],
+                  ),
+                ),
+              ),
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Column(
+                  children: [
+                    _buildHeader(),
+                    _buildBalanceCard(),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+      bottomNavigationBar: _buildModernBottomNav(),
+      floatingActionButton: _buildEmergencyButton(),
+      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Header
+  // ============================================================================
+
+  Widget _buildHeader() {
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, 16, 20, 24),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: _openProfile,
+            child: Container(
+              width: 48,
+              height: 48,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [AppTheme.primaryBlue, AppTheme.primaryBlue.withOpacity(0.7)],
+                ),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(Icons.person, color: Colors.white, size: 24),
+            ),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  _userName?.split(' ').first ?? "User",
+                  style: GoogleFonts.poppins(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1A1F36),
+                  ),
+                ),
+                if (_userRole == "POLICE_OFFICER" && _rank != null)
+                  Text(
+                    _getShortRankDisplay(_rank),
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.successGreen,
+                    ),
+                  )
+                else
+                  Text(
+                    _getRoleDisplayName(_userRole),
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: Color(0xFF8F9BB3),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+            decoration: BoxDecoration(
+              color: _getStatusColor().withOpacity(0.1),
+              borderRadius: BorderRadius.circular(20),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: _getStatusColor(),
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                SizedBox(width: 6),
+                Text(
+                  _getStatusText(),
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: _getStatusColor(),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Balance Card
+  // ============================================================================
+
+  Widget _buildBalanceCard() {
+    return Container(
+      margin: EdgeInsets.fromLTRB(20, 0, 20, 24),
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFF2E5BFF),
+            Color(0xFF1E3A8A),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFF2E5BFF).withOpacity(0.3),
+            blurRadius: 20,
+            offset: Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(Icons.shield_rounded, color: Colors.white, size: 20),
+              ),
+              SizedBox(width: 10),
+              Text(
+                'Smart Incident',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withOpacity(0.9),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 20),
+          Text(
+            'Active Incidents',
+            style: GoogleFonts.poppins(
+              fontSize: 12,
+              color: Colors.white.withOpacity(0.7),
+            ),
+          ),
+          SizedBox(height: 4),
+          Row(
+            children: [
+              Text(
+                _balanceVisible ? '7' : '•••',
+                style: GoogleFonts.poppins(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 2,
+                ),
+              ),
+              SizedBox(width: 12),
+              GestureDetector(
+                onTap: () => setState(() => _balanceVisible = !_balanceVisible),
+                child: Icon(
+                  _balanceVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
+                  color: Colors.white.withOpacity(0.7),
+                  size: 20,
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 20),
+          Row(
+            children: [
+              _buildStatItem(Icons.check_circle_outline, 'Resolved', '5'),
+              SizedBox(width: 24),
+              _buildStatItem(Icons.pending_outlined, 'Pending', '2'),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatItem(IconData icon, String label, String value) {
+    return Row(
+      children: [
+        Icon(icon, color: Colors.white.withOpacity(0.7), size: 16),
+        SizedBox(width: 6),
+        Text(
+          value,
+          style: GoogleFonts.poppins(
+            fontSize: 14,
+            fontWeight: FontWeight.w600,
+            color: Colors.white,
+          ),
+        ),
+        SizedBox(width: 4),
+        Text(
+          label,
+          style: GoogleFonts.poppins(
+            fontSize: 12,
+            color: Colors.white.withOpacity(0.7),
+          ),
+        ),
+      ],
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Shifts Section
+  // ============================================================================
+
+  Widget _buildShiftsSection() {
+    return Container(
+      margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Text(
+                'My Shifts',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+              Spacer(),
+              Container(
+                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${_officerShifts.length} total',
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w700,
+                    color: AppTheme.primaryBlue,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
+          if (_isLoadingShifts)
+            _buildShiftsLoading()
+          else if (_officerShifts.isEmpty)
+            _buildNoShifts()
+          else
+            ..._officerShifts.take(5).map((shift) => _buildImprovedShiftCard(shift)).toList(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImprovedShiftCard(Map<String, dynamic> shift) {
+    final shiftType = shift['shiftType'] ?? 'N/A';
+    final shiftDate = shift['shiftDate'] ?? '';
+    final startTime = shift['startTime'] ?? '06:00';
+    final endTime = shift['endTime'] ?? '14:00';
+    final isExcused = shift['isExcused'] ?? false;
+    final isPunishment = shift['isPunishmentMode'] ?? false;
+
+    final isCurrentShift = _currentShift != null && _currentShift!['uid'] == shift['uid'];
+    final isOffShift = shiftType.toUpperCase() == 'OFF';
+    final isPastShift = _isShiftInPast(shiftDate);
+
+    final statusInfo = _getShiftStatusInfo(
+      isCurrentShift: isCurrentShift,
+      isOffShift: isOffShift,
+      isPastShift: isPastShift,
+      isExcused: isExcused,
+      isPunishment: isPunishment,
+    );
+
+    return Container(
+      margin: EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: statusInfo['bgColor'],
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: statusInfo['borderColor'],
+          width: statusInfo['isActive'] ? 2 : 1,
+        ),
+        boxShadow: statusInfo['isActive']
+            ? [
+          BoxShadow(
+            color: statusInfo['accentColor'].withOpacity(0.3),
+            blurRadius: 12,
+            offset: Offset(0, 4),
+          ),
+        ]
+            : null,
+      ),
+      child: Stack(
+        children: [
+          if (statusInfo['isCompleted'])
+            Positioned.fill(
+              child: Container(
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.6),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+              ),
+            ),
+
+          Padding(
+            padding: EdgeInsets.all(16),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: statusInfo['accentColor'].withOpacity(0.15),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        statusInfo['icon'],
+                        color: statusInfo['accentColor'],
+                        size: 20,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  shiftType,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: statusInfo['isCompleted']
+                                        ? Color(0xFF1A1F36).withOpacity(0.5)
+                                        : Color(0xFF1A1F36),
+                                  ),
+                                ),
+                              ),
+                              Container(
+                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: statusInfo['badgeColor'].withOpacity(0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(
+                                    color: statusInfo['badgeColor'].withOpacity(0.3),
+                                  ),
+                                ),
+                                child: Text(
+                                  statusInfo['statusText'],
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w700,
+                                    color: statusInfo['badgeColor'],
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            _formatShiftDate(shiftDate),
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              color: statusInfo['isCompleted']
+                                  ? Color(0xFF8F9BB3).withOpacity(0.6)
+                                  : Color(0xFF8F9BB3),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+
+                if (!isOffShift && !isExcused) ...[
+                  SizedBox(height: 12),
+                  Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: statusInfo['isCompleted']
+                          ? Color(0xFFF8F9FC).withOpacity(0.5)
+                          : Color(0xFFF8F9FC),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.access_time_rounded,
+                          size: 16,
+                          color: statusInfo['isCompleted']
+                              ? Color(0xFF8F9BB3).withOpacity(0.5)
+                              : Color(0xFF8F9BB3),
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          '$startTime - $endTime',
+                          style: GoogleFonts.poppins(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: statusInfo['isCompleted']
+                                ? Color(0xFF1A1F36).withOpacity(0.5)
+                                : Color(0xFF1A1F36),
+                          ),
+                        ),
+                        Spacer(),
+                        _buildDaysIndicator(shiftDate, statusInfo['isCompleted']),
+                      ],
+                    ),
+                  ),
+                ],
+
+                if (isCurrentShift && _isOnDuty == true) ...[
+                  SizedBox(height: 8),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [AppTheme.successGreen, AppTheme.successGreen.withOpacity(0.8)],
+                      ),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        SizedBox(width: 6),
+                        Text(
+                          'ACTIVE - You are currently on duty',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Map<String, dynamic> _getShiftStatusInfo({
+    required bool isCurrentShift,
+    required bool isOffShift,
+    required bool isPastShift,
+    required bool isExcused,
+    required bool isPunishment,
+  }) {
+    if (isExcused) {
+      return {
+        'statusText': 'EXCUSED',
+        'icon': Icons.event_busy_rounded,
+        'accentColor': AppTheme.successGreen,
+        'badgeColor': AppTheme.successGreen,
+        'bgColor': Colors.white,
+        'borderColor': AppTheme.successGreen.withOpacity(0.3),
+        'isActive': false,
+        'isCompleted': true,
+      };
+    }
+
+    if (isOffShift) {
+      if (isPastShift) {
+        return {
+          'statusText': 'DAY OFF',
+          'icon': Icons.beach_access_rounded,
+          'accentColor': Color(0xFF8F9BB3),
+          'badgeColor': Color(0xFF8F9BB3),
+          'bgColor': Colors.white,
+          'borderColor': Color(0xFFE4E9F2),
+          'isActive': false,
+          'isCompleted': true,
+        };
+      } else {
+        return {
+          'statusText': 'OFF DAY',
+          'icon': Icons.free_breakfast_rounded,
+          'accentColor': Color(0xFF667EEA),
+          'badgeColor': Color(0xFF667EEA),
+          'bgColor': Color(0xFF667EEA).withOpacity(0.05),
+          'borderColor': Color(0xFF667EEA).withOpacity(0.2),
+          'isActive': false,
+          'isCompleted': false,
+        };
+      }
+    }
+
+    if (isPunishment) {
+      return {
+        'statusText': isPastShift ? 'COMPLETED' : 'PUNISHMENT',
+        'icon': Icons.warning_rounded,
+        'accentColor': AppTheme.errorRed,
+        'badgeColor': AppTheme.errorRed,
+        'bgColor': isPastShift ? Colors.white : AppTheme.errorRed.withOpacity(0.05),
+        'borderColor': AppTheme.errorRed.withOpacity(0.2),
+        'isActive': false,
+        'isCompleted': isPastShift,
+      };
+    }
+
+    if (isCurrentShift && _isOnDuty == true) {
+      return {
+        'statusText': 'ACTIVE NOW',
+        'icon': Icons.security_rounded,
+        'accentColor': AppTheme.successGreen,
+        'badgeColor': AppTheme.successGreen,
+        'bgColor': AppTheme.successGreen.withOpacity(0.05),
+        'borderColor': AppTheme.successGreen,
+        'isActive': true,
+        'isCompleted': false,
+      };
+    }
+
+    if (isCurrentShift) {
+      return {
+        'statusText': 'TODAY',
+        'icon': Icons.schedule_rounded,
+        'accentColor': Color(0xFF2E5BFF),
+        'badgeColor': Color(0xFF2E5BFF),
+        'bgColor': Color(0xFF2E5BFF).withOpacity(0.05),
+        'borderColor': Color(0xFF2E5BFF).withOpacity(0.3),
+        'isActive': true,
+        'isCompleted': false,
+      };
+    }
+
+    if (isPastShift) {
+      return {
+        'statusText': 'COMPLETED',
+        'icon': Icons.check_circle_rounded,
+        'accentColor': AppTheme.successGreen,
+        'badgeColor': AppTheme.successGreen,
+        'bgColor': Colors.white,
+        'borderColor': Color(0xFFE4E9F2),
+        'isActive': false,
+        'isCompleted': true,
+      };
+    }
+
+    return {
+      'statusText': 'UPCOMING',
+      'icon': Icons.schedule_rounded,
+      'accentColor': Color(0xFF2E5BFF),
+      'badgeColor': Color(0xFF2E5BFF),
+      'bgColor': Colors.white,
+      'borderColor': Color(0xFFE4E9F2),
+      'isActive': false,
+      'isCompleted': false,
+    };
+  }
+
+  Widget _buildDaysIndicator(String dateString, bool isCompleted) {
+    try {
+      final shiftDate = DateTime.parse(dateString);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final shiftDay = DateTime(shiftDate.year, shiftDate.month, shiftDate.day);
+      final difference = shiftDay.difference(today).inDays;
+
+      String text;
+      Color color;
+
+      if (difference == 0) {
+        text = 'Today';
+        color = AppTheme.successGreen;
+      } else if (difference == 1) {
+        text = 'Tomorrow';
+        color = Color(0xFF2E5BFF);
+      } else if (difference > 0) {
+        text = 'In $difference days';
+        color = Color(0xFF2E5BFF);
+      } else {
+        text = '${difference.abs()}d ago';
+        color = Color(0xFF8F9BB3);
+      }
+
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(6),
+        ),
+        child: Text(
+          text,
+          style: GoogleFonts.poppins(
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            color: isCompleted ? color.withOpacity(0.5) : color,
+          ),
+        ),
+      );
+    } catch (e) {
+      return SizedBox.shrink();
+    }
+  }
+
+  String _formatShiftDate(String dateString) {
+    try {
+      final date = DateTime.parse(dateString);
+      final now = DateTime.now();
+      final today = DateTime(now.year, now.month, now.day);
+      final shiftDay = DateTime(date.year, date.month, date.day);
+
+      if (shiftDay == today) {
+        return 'Today • ${_formatDate(date)}';
+      } else if (shiftDay == today.add(Duration(days: 1))) {
+        return 'Tomorrow • ${_formatDate(date)}';
+      } else if (shiftDay == today.subtract(Duration(days: 1))) {
+        return 'Yesterday • ${_formatDate(date)}';
+      } else {
+        final dayName = _getDayName(date.weekday);
+        return '$dayName • ${_formatDate(date)}';
+      }
+    } catch (e) {
+      return dateString;
+    }
+  }
+
+  String _formatDate(DateTime date) {
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[date.month - 1]} ${date.day}';
+  }
+
+  String _getDayName(int weekday) {
+    final days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    return days[weekday - 1];
+  }
+
+  bool _isShiftInPast(String dateString) {
+    try {
+      final shiftDate = DateTime.parse(dateString);
+      final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+      final shiftDay = DateTime(shiftDate.year, shiftDate.month, shiftDate.day);
+      return shiftDay.isBefore(today);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  Widget _buildShiftsLoading() {
+    return Container(
+      padding: EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Center(
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+    );
+  }
+
+  Widget _buildNoShifts() {
+    return Container(
+      padding: EdgeInsets.all(32),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.schedule_outlined, size: 48, color: Color(0xFF8F9BB3)),
+          SizedBox(height: 12),
+          Text(
+            'No shifts assigned',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Admin Section
+  // ============================================================================
+
+  Widget _buildAdminSection() {
+    return Container(
+      margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Admin Tools',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+          SizedBox(height: 16),
+          GridView.count(
+            crossAxisCount: 2,
+            shrinkWrap: true,
+            physics: NeverScrollableScrollPhysics(),
+            mainAxisSpacing: 12,
+            crossAxisSpacing: 12,
+            childAspectRatio: 1.5,
+            children: [
+              _buildAdminCard(
+                icon: Icons.people_outline_rounded,
+                title: 'Manage\nUsers',
+                onTap: _openUserManagement,
+              ),
+              _buildAdminCard(
+                icon: Icons.location_city_outlined,
+                title: 'Police\nStations',
+                onTap: _openPoliceStationManagement,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCitizenContent() {
+    return Container(
+      margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'My Reports',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+          SizedBox(height: 16),
+          Container(
+            padding: EdgeInsets.all(32),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(16),
+            ),
+            child: Column(
+              children: [
+                Icon(Icons.description_outlined, size: 48, color: Color(0xFF8F9BB3)),
+                SizedBox(height: 12),
+                Text(
+                  'No reports yet',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1F36),
+                  ),
+                ),
+                SizedBox(height: 8),
+                Text(
+                  'Your incident reports will appear here',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Color(0xFF8F9BB3),
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  Widget _buildAdminCard({
+    required IconData icon,
+    required String title,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Color(0xFFE4E9F2)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Container(
+              padding: EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                color: AppTheme.primaryBlue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Icon(icon, color: AppTheme.primaryBlue, size: 20),
+            ),
+            Text(
+              title,
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1A1F36),
+                height: 1.2,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Modern Bottom Navigation
+  // ============================================================================
+
+  Widget _buildModernBottomNav() {
+    return Container(
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFF2E5BFF).withOpacity(0.08),
+            blurRadius: 32,
+            offset: Offset(0, -8),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _buildBottomNavIcon(
+                icon: Icons.home_rounded,
+                label: 'Home',
+                onTap: () {},
+              ),
+              _buildBottomNavIcon(
+                icon: Icons.analytics_rounded,
+                label: 'Track',
+                onTap: () {},
+              ),
+              SizedBox(width: 64), // Space for FAB
+              _buildBottomNavIcon(
+                icon: Icons.forum_rounded,
+                label: 'Chat',
+                onTap: () {},
+              ),
+              _buildBottomNavIcon(
+                icon: Icons.emergency_outlined,
+                label: 'Report',
+                onTap: () {
+                  _navigateToReportIncident();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+  Widget _buildBottomNavIcon({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        width: 64,
+        padding: EdgeInsets.symmetric(vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              size: 24,
+              color: Color(0xFF1A3A6F),
+            ),
+            SizedBox(height: 4),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                fontSize: 10,
+                fontWeight: FontWeight.w500,
+                color: Color(0xFF1A3A6F),
+                letterSpacing: -0.2,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.clip,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Emergency Button
+  // ============================================================================
+
+  Widget _buildEmergencyButton() {
+    return Container(
+      width: 65,
+      height: 65,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            Color(0xFFFF6B6B),
+            Color(0xFFFF5252),
+          ],
+        ),
+        shape: BoxShape.circle,
+        boxShadow: [
+          BoxShadow(
+            color: Color(0xFFFF5252).withOpacity(0.4),
+            blurRadius: 20,
+            offset: Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(40),
+          onTap: _showEmergencyDialog,
+          child: Center(
+            child: Icon(
+              Icons.emergency_rounded,
+              color: Colors.white,
+              size: 32,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showEmergencyDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        child: Container(
+          padding: EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Colors.white, Color(0xFFF8F9FC)],
+            ),
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: Color(0xFFFF5252).withOpacity(0.3),
+                blurRadius: 30,
+                offset: Offset(0, 10),
+              ),
+            ],
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 80,
+                height: 80,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFFFF6B6B), Color(0xFFFF5252)],
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(
+                  Icons.emergency_rounded,
+                  color: Colors.white,
+                  size: 40,
+                ),
+              ),
+              SizedBox(height: 20),
+
+              Text(
+                'EMERGENCY',
+                style: GoogleFonts.poppins(
+                  fontSize: 24,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFFFF5252),
+                ),
+              ),
+              SizedBox(height: 8),
+              Text(
+                'Choose emergency action',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  color: Color(0xFF8F9BB3),
+                ),
+                textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 24),
+
+              _buildEmergencyAction(
+                icon: Icons.phone_rounded,
+                title: 'Call 112',
+                subtitle: 'Emergency hotline',
+                color: Color(0xFFFF5252),
+                onTap: () {
+                  Navigator.pop(context);
+                },
+              ),
+              SizedBox(height: 12),
+              _buildEmergencyAction(
+                icon: Icons.warning_rounded,
+                title: 'Panic Alert',
+                subtitle: 'Notify nearby stations',
+                color: Color(0xFFFFB75E),
+                onTap: () {},
+              ),
+              SizedBox(height: 12),
+              _buildEmergencyAction(
+                icon: Icons.location_on_rounded,
+                title: 'Share Location',
+                subtitle: 'Send your location',
+                color: Color(0xFF4ECDC4),
+                onTap: () {
+                  Navigator.pop(context);
+                },
+              ),
+
+              SizedBox(height: 20),
+
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(
+                  'Cancel',
+                  style: GoogleFonts.poppins(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF8F9BB3),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildEmergencyAction({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(10),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Icon(icon, color: Colors.white, size: 20),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    title,
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1F36),
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Color(0xFF8F9BB3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 16,
+              color: color,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Nearby Stations Dialog
+  // ============================================================================
+
+  Widget _buildNearbyStationsDialog() {
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(24),
+        ),
+        child: FutureBuilder<void>(
+          future: _getCurrentLocation(),
+          builder: (context, snapshot) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+                    ),
+                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.location_city_rounded, color: Colors.white, size: 24),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Nearby Stations',
+                              style: GoogleFonts.poppins(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                            ),
+                            Text(
+                              'Select your preferred station',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: Colors.white.withOpacity(0.8),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.close_rounded, color: Colors.white),
+                        onPressed: () => Navigator.pop(context),
+                      ),
+                    ],
+                  ),
+                ),
+
+                if (_currentPosition != null)
+                  Container(
+                    margin: EdgeInsets.all(20),
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: AppTheme.successGreen.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: AppTheme.successGreen.withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.my_location_rounded, color: AppTheme.successGreen, size: 20),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'Your Location',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF1A1F36),
+                                ),
+                              ),
+                              Text(
+                                _currentLocationName ?? 'Loading...',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  color: Color(0xFF8F9BB3),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                Flexible(
+                  child: snapshot.connectionState == ConnectionState.waiting
+                      ? _buildDialogLoading()
+                      : _nearbyStations.isEmpty
+                      ? _buildDialogEmpty()
+                      : _buildDialogStationsList(),
+                ),
+
+                Container(
+                  padding: EdgeInsets.all(20),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: OutlinedButton.styleFrom(
+                            padding: EdgeInsets.symmetric(vertical: 14),
+                            side: BorderSide(color: Color(0xFFE4E9F2)),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'Cancel',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF1A1F36),
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.pop(context),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF2E5BFF),
+                            padding: EdgeInsets.symmetric(vertical: 14),
+                            elevation: 0,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          child: Text(
+                            'Continue',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDialogLoading() {
+    return Container(
+      padding: EdgeInsets.all(40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          ScaleTransition(
+            scale: _pulseAnimation,
+            child: Container(
+              width: 60,
+              height: 60,
+              decoration: BoxDecoration(
+                color: Color(0xFF2E5BFF).withOpacity(0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Center(
+                child: CircularProgressIndicator(strokeWidth: 2),
+              ),
+            ),
+          ),
+          SizedBox(height: 20),
+          Text(
+            'Finding nearby stations...',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogEmpty() {
+    return Container(
+      padding: EdgeInsets.all(40),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.search_off_rounded, size: 48, color: Color(0xFF8F9BB3)),
+          SizedBox(height: 16),
+          Text(
+            'No stations found',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'No stations within ${_maxDistance.toInt()}km',
+            style: GoogleFonts.poppins(
+              fontSize: 12,
+              color: Color(0xFF8F9BB3),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogStationsList() {
+    return ListView.separated(
+      padding: EdgeInsets.all(20),
+      shrinkWrap: true,
+      itemCount: _nearbyStations.length,
+      separatorBuilder: (_, __) => SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final station = _nearbyStations[index];
+        final name = station['name'] ?? 'Unknown';
+        final distance = station['temporaryDistance'] ?? 0.0;
+        final contact = station['contactInfo'] ?? 'N/A';
+
+        return InkWell(
+          onTap: () => _selectStationForReport(station),
+          borderRadius: BorderRadius.circular(12),
+          child: Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Color(0xFFF8F9FC),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Color(0xFF2E5BFF).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Icon(Icons.local_police_rounded, color: Color(0xFF2E5BFF), size: 20),
+                ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        name,
+                        style: GoogleFonts.poppins(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A1F36),
+                        ),
+                      ),
+                      Text(
+                        contact,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Color(0xFF8F9BB3),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: AppTheme.successGreen.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Text(
+                    '${distance.toStringAsFixed(1)}km',
+                    style: GoogleFonts.poppins(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: AppTheme.successGreen,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+// ============================================================================
+// UI COMPONENTS - Profile Drawer (COMPLETE WITH DELETE ACCOUNT)
+// ============================================================================
+
+  Widget _buildProfileDrawer() {
+    return Container(
+      color: Colors.white,
+      child: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            // ========================================================================
+            // HEADER SECTION (FIXED - Not scrollable)
+            // ========================================================================
+            Container(
+              padding: EdgeInsets.fromLTRB(20, 24, 20, 24),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Profile Avatar
+                  Container(
+                    width: 64,
+                    height: 64,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withOpacity(0.15),
+                          blurRadius: 8,
+                          offset: Offset(0, 3),
+                        ),
+                      ],
+                    ),
+                    child: Icon(Icons.person, color: Colors.white, size: 32),
+                  ),
+                  SizedBox(height: 14),
+
+                  // User Name
+                  Text(
+                    _userName ?? "User",
+                    style: GoogleFonts.poppins(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                      height: 1.2,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  SizedBox(height: 6),
+
+                  // Role/Rank Display
+                  if (_userRole == "POLICE_OFFICER" && _rank != null)
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        _getShortRankDisplay(_rank),
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    )
+                  else
+                    Text(
+                      _getRoleDisplayName(_userRole),
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white.withOpacity(0.9),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // ========================================================================
+            // SCROLLABLE CONTENT SECTION
+            // ========================================================================
+            Expanded(
+              child: SingleChildScrollView(
+                physics: BouncingScrollPhysics(),
+                padding: EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // ==================================================================
+                    // PERSONAL INFORMATION CARD
+                    // ==================================================================
+                    Container(
+                      width: double.infinity,
+                      padding: EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Color(0xFFF8F9FC),
+                        borderRadius: BorderRadius.circular(10),
+                        border: Border.all(color: Color(0xFFE4E9F2), width: 1),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.person_outline_rounded,
+                                color: Color(0xFF2E5BFF),
+                                size: 16,
+                              ),
+                              SizedBox(width: 7),
+                              Text(
+                                'Personal Information',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Color(0xFF1A1F36),
+                                ),
+                              ),
+                            ],
+                          ),
+                          SizedBox(height: 12),
+
+                          _buildProfileInfoRow(
+                            Icons.phone_rounded,
+                            "Phone Number",
+                            _userPhone ?? "N/A",
+                          ),
+
+                          if (_userRole == "POLICE_OFFICER") ...[
+                            if (_rank != null)
+                              _buildProfileInfoRow(
+                                Icons.military_tech_rounded,
+                                "Rank",
+                                _getFullRankDisplay(_rank),
+                                valueColor: AppTheme.successGreen,
+                              ),
+                            if (_badgeNumber != null)
+                              _buildProfileInfoRow(
+                                Icons.badge_rounded,
+                                "Badge Number",
+                                _badgeNumber!,
+                                valueColor: Color(0xFF2E5BFF),
+                              ),
+                          ],
+
+                          if (_stationName != null)
+                            _buildProfileInfoRow(
+                              Icons.location_on_rounded,
+                              "Assigned Station",
+                              _stationName!,
+                            ),
+                        ],
+                      ),
+                    ),
+
+                    SizedBox(height: 14),
+
+                    // ==================================================================
+                    // ADMIN TOOLS (Only for Admins)
+                    // ==================================================================
+                    if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") ...[
+                      Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          color: Color(0xFFF8F9FC),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: Color(0xFFE4E9F2), width: 1),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Icon(
+                                  Icons.admin_panel_settings_rounded,
+                                  color: AppTheme.errorRed,
+                                  size: 16,
+                                ),
+                                SizedBox(width: 7),
+                                Text(
+                                  'Admin Tools',
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1A1F36),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 10),
+
+                            _buildProfileActionTile(
+                              Icons.people_outline_rounded,
+                              "Manage Users",
+                              _openUserManagement,
+                            ),
+                            _buildProfileActionTile(
+                              Icons.location_city_outlined,
+                              "Police Stations",
+                              _openPoliceStationManagement,
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: 14),
+                    ],
+
+                    // ==================================================================
+                    // LOGOUT BUTTON
+                    // ==================================================================
+                    SizedBox(
+                      width: double.infinity,
+                      height: 46,
+                      child: ElevatedButton(
+                        onPressed: _logout,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.errorRed,
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.logout_rounded, size: 16, color: Colors.white),
+                            SizedBox(width: 8),
+                            Text(
+                              'Logout',
+                              style: GoogleFonts.poppins(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                    // ==================================================================
+                    // DELETE ACCOUNT (Only for CITIZEN)
+                    // ==================================================================
+                    if (_userRole == "CITIZEN") ...[
+                      SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        height: 46,
+                        child: OutlinedButton(
+                          onPressed: _showDeleteAccountDialog,
+                          style: OutlinedButton.styleFrom(
+                            side: BorderSide(color: AppTheme.errorRed, width: 1.5),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.delete_forever_rounded,
+                                size: 17,
+                                color: AppTheme.errorRed,
+                              ),
+                              SizedBox(width: 8),
+                              Text(
+                                'Delete Account',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppTheme.errorRed,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+
+                      SizedBox(height: 6),
+                      Center(
+                        child: Text(
+                          'This action cannot be undone',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            color: Color(0xFF8F9BB3),
+                            fontStyle: FontStyle.italic,
+                          ),
+                        ),
+                      ),
+                    ],
+
+                    SizedBox(height: 16), // Bottom padding
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+// ============================================================================
+// PROFILE DRAWER - HELPER WIDGETS
+// ============================================================================
+
+  Widget _buildProfileInfoRow(
+      IconData icon,
+      String label,
+      String value, {
+        Color? valueColor,
+      }) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Icon Container
+          Container(
+            padding: EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: Color(0xFF2E5BFF).withOpacity(0.1),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Icon(
+              icon,
+              size: 14,
+              color: Color(0xFF2E5BFF),
+            ),
+          ),
+          SizedBox(width: 12),
+
+          // Label and Value
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  label,
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    color: Color(0xFF8F9BB3),
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  value,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: valueColor ?? Color(0xFF1A1F36),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProfileActionTile(
+      IconData icon,
+      String title,
+      VoidCallback onTap,
+      ) {
+    return InkWell(
+      onTap: () {
+        Navigator.pop(context); // Close drawer first
+        onTap();
+      },
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+        child: Row(
+          children: [
+            Icon(
+              icon,
+              size: 20,
+              color: Color(0xFF8F9BB3),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                title,
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+            ),
+            Icon(
+              Icons.chevron_right_rounded,
+              size: 20,
+              color: Color(0xFF8F9BB3),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildWarningPoint(String text) {
+    return Padding(
+      padding: EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Icon(
+            Icons.circle,
+            size: 6,
+            color: Color(0xFF856404),
+          ),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              text,
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                color: Color(0xFF856404),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================================
+  // RANK DISPLAY HELPERS
+  // ============================================================================
+
+  String _getFullRankDisplay(String? rankAbbreviation) {
+    if (rankAbbreviation == null) return "Officer";
+
+    switch (rankAbbreviation.toUpperCase()) {
+      case "PC":
+        return "Police Constable (PC)";
+      case "CPC":
+        return "Corporal Police Constable (CPC)";
+      case "SPC":
+        return "Senior Police Constable (SPC)";
+      case "SGT":
+      case "PS":
+        return "Police Sergeant (SGT)";
+      case "SSGT":
+      case "SPS":
+        return "Senior Police Sergeant (SSGT)";
+      case "CSGT":
+      case "CPS":
+        return "Corporal Police Sergeant (CSGT)";
+      case "IP":
+      case "INS":
+        return "Inspector of Police (IP)";
+      case "AIP":
+      case "AINS":
+        return "Assistant Inspector of Police (AIP)";
+      case "ASP":
+        return "Assistant Superintendent (ASP)";
+      case "DSP":
+        return "Deputy Superintendent (DSP)";
+      case "SP":
+        return "Superintendent (SP)";
+      case "SSP":
+        return "Senior Superintendent (SSP)";
+      case "CSP":
+        return "Chief Superintendent (CSP)";
+      case "ACP":
+        return "Assistant Commissioner (ACP)";
+      case "DCP":
+        return "Deputy Commissioner (DCP)";
+      case "CP":
+        return "Commissioner (CP)";
+      case "IGP":
+        return "Inspector General (IGP)";
+      default:
+        return rankAbbreviation;
+    }
+  }
+
+  String _getShortRankDisplay(String? rankAbbreviation) {
+    if (rankAbbreviation == null) return "Officer";
+
+    switch (rankAbbreviation.toUpperCase()) {
+      case "PC": return "Police Constable";
+      case "CPC": return "Corporal Constable";
+      case "SPC": return "Senior Constable";
+      case "SGT":
+      case "PS": return "Sergeant";
+      case "SSGT":
+      case "SPS": return "Senior Sergeant";
+      case "IP":
+      case "INS": return "Inspector";
+      case "AIP":
+      case "AINS": return "Asst. Inspector";
+      case "ASP": return "Asst. Superintendent";
+      case "DSP": return "Deputy Superintendent";
+      case "SP": return "Superintendent";
+      case "ACP": return "Asst. Commissioner";
+      case "DCP": return "Deputy Commissioner";
+      case "CP": return "Commissioner";
+      case "IGP": return "Inspector General";
+      default: return rankAbbreviation;
+    }
+  }
+
+  // ============================================================================
+  // UI COMPONENTS - Loading Screen
+  // ============================================================================
+
+  Widget _buildLoadingScreen() {
+    return Scaffold(
+      backgroundColor: Color(0xFFF5F7FA),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 80,
+              height: 80,
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+                ),
+                shape: BoxShape.circle,
+              ),
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  valueColor: AlwaysStoppedAnimation(Colors.white),
+                ),
+              ),
+            ),
+            SizedBox(height: 24),
+            Text(
+              "Loading...",
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1A1F36),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
