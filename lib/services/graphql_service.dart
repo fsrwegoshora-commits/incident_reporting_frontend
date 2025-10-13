@@ -3,8 +3,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class GraphQLService {
-  final String endpoint = 'http://192.168.7.163:8080/graphql';
-  //final String endpoint = "http://localhost:8080/graphql";
+  //final String endpoint = 'http://192.168.7.163:8080/graphql';
+  final String endpoint = "http://localhost:8080/graphql";
 
   /// 🔁 Send a GraphQL mutation with optional token
   Future<Map<String, dynamic>> sendMutation(

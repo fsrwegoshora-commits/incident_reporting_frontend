@@ -42,10 +42,22 @@ dependencies:
   geocoding: ^3.0.0
   dropdown_search: ^5.0.6
   google_fonts: ^6.2.1
+  record: ^6.1.2
+  audioplayers: ^5.2.1
+  path_provider: ^2.1.1
+  permission_handler: ^11.1.0
 
+  # 📹 Video & Image Picking
+  image_picker: ^1.0.5
+  video_player: ^2.8.1
 
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
+  # 📁 File Handling
+  file_picker: ^10.3.3
+  mime: ^1.0.4
+
+  # 📤 Upload to Server
+  dio: ^5.4.0
+
   cupertino_icons: ^1.0.8
 
 dev_dependencies:

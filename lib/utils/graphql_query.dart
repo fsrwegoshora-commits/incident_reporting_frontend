@@ -679,4 +679,380 @@ query GetAreaTypes(\$page: Int!, \$size: Int!, \$areaLevels: [AdministrativeArea
 }
 """;
 
+// ============================================================================
+// INCIDENT MUTATIONS
+// ============================================================================
+
+const String createIncidentMutation = '''
+  mutation CreateIncident(\$incidentDto: IncidentReportDtoInput!) {
+    createIncident(incidentDto: \$incidentDto) {
+      status
+      message
+      data {
+        uid
+        title
+        description
+        type
+        location
+        latitude
+        longitude
+        status
+        reportedAt
+        assignedStation {
+          uid
+          name
+        }
+      }
+    }
+  }
+''';
+
+const String updateIncidentMutation = '''
+  mutation UpdateIncident(\$incidentDto: IncidentReportDtoInput!) {
+    updateIncident(incidentDto: \$incidentDto) {
+      status
+      message
+      data {
+        uid
+        title
+        status
+        resolvedAt
+        assignedOfficer {
+          uid
+          user {
+            name
+            phoneNumber
+          }
+        }
+      }
+    }
+  }
+''';
+
+const String assignOfficerToIncidentMutation = '''
+  mutation AssignOfficer(\$incidentUid: String!, \$officerUid: String!) {
+    assignOfficerToIncident(incidentUid: \$incidentUid, officerUid: \$officerUid) {
+      status
+      message
+      data {
+        uid
+        assignedOfficer {
+          uid
+          user {
+            name
+          }
+        }
+      }
+    }
+  }
+''';
+
+const String deleteIncidentMutation = '''
+  mutation DeleteIncident(\$uid: String!) {
+    deleteIncident(uid: \$uid) {
+      status
+      message
+    }
+  }
+''';
+
+// ============================================================================
+// INCIDENT QUERIES
+// ============================================================================
+
+const String getIncidentQuery = '''
+  query GetIncident(\$uid: String!) {
+    getIncident(uid: \$uid) {
+      status
+      message
+      data {
+        uid
+        title
+        description
+        type
+        location
+        latitude
+        longitude
+        imageUrl
+        audioUrl
+        videoUrl
+        status
+        isLiveCallRequested
+        reportedAt
+        resolvedAt
+        reportedBy {
+          uid
+          name
+          phoneNumber
+        }
+        assignedStation {
+          uid
+          name
+          contactInfo
+        }
+        assignedOfficer {
+          uid
+          user {
+            name
+            phoneNumber
+          }
+          rank
+          badgeNumber
+        }
+      }
+    }
+  }
+''';
+
+const String getMyIncidentsQuery = '''
+  query GetMyIncidents(\$pageableParam: PageableParamInput!) {
+    getMyIncidents(pageableParam: \$pageableParam) {
+      status
+      message
+      data {
+        content {
+          uid
+          title
+          type
+          location
+          status
+          reportedAt
+          assignedStation {
+            name
+          }
+        }
+        totalElements
+        totalPages
+        number
+      }
+    }
+  }
+''';
+
+const String getStationIncidentsQuery = '''
+  query GetStationIncidents(\$pageableParam: PageableParamInput!, \$status: IncidentStatus) {
+    getStationIncidents(pageableParam: \$pageableParam, status: \$status) {
+      status
+      message
+      data {
+        content {
+          uid
+          title
+          type
+          location
+          status
+          reportedAt
+          reportedBy {
+            name
+            phoneNumber
+          }
+          assignedOfficer {
+            user {
+              name
+            }
+          }
+        }
+        totalElements
+        totalPages
+        number
+      }
+    }
+  }
+''';
+
+const String getOfficerIncidentsQuery = '''
+  query GetOfficerIncidents(\$pageableParam: PageableParamInput!, \$status: IncidentStatus) {
+    getOfficerIncidents(pageableParam: \$pageableParam, status: \$status) {
+      status
+      message
+      data {
+        content {
+          uid
+          title
+          type
+          location
+          status
+          reportedAt
+          reportedBy {
+            name
+            phoneNumber
+          }
+        }
+        totalElements
+        totalPages
+      }
+    }
+  }
+''';
+
+const String getNearbyIncidentsQuery = '''
+  query GetNearbyIncidents(\$latitude: Float!, \$longitude: Float!, \$radiusKm: Float, \$status: IncidentStatus) {
+    getNearbyIncidents(latitude: \$latitude, longitude: \$longitude, radiusKm: \$radiusKm, status: \$status) {
+      status
+      message
+      data {
+        uid
+        title
+        type
+        location
+        latitude
+        longitude
+        status
+        reportedAt
+      }
+    }
+  }
+''';
+
+const String getIncidentStatsQuery = '''
+  query GetIncidentStats(\$stationUid: String) {
+    getIncidentStats(stationUid: \$stationUid) {
+      status
+      message
+      data {
+        pending
+        inProgress
+        resolved
+        recentCount
+      }
+    }
+  }
+''';
+
+// ============================================================================
+// CHAT MESSAGE MUTATIONS
+// ============================================================================
+
+const String sendChatMessageMutation = '''
+  mutation SendChatMessage(\$chatMessageDto: ChatMessageDtoInput!) {
+    sendChatMessage(chatMessageDto: \$chatMessageDto) {
+      status
+      message
+      data {
+        uid
+        message
+        messageType
+        sentAt
+        sender {
+          uid
+          name
+        }
+      }
+    }
+  }
+''';
+
+const String deleteChatMessageMutation = '''
+  mutation DeleteChatMessage(\$uid: String!) {
+    deleteChatMessage(uid: \$uid) {
+      status
+      message
+    }
+  }
+''';
+
+const String sendSystemMessageMutation = '''
+  mutation SendSystemMessage(\$incidentUid: String!, \$message: String!) {
+    sendSystemMessage(incidentUid: \$incidentUid, message: \$message) {
+      status
+      message
+      data {
+        uid
+        message
+        messageType
+        sentAt
+      }
+    }
+  }
+''';
+
+const String markMessagesAsReadMutation = '''
+  mutation MarkMessagesAsRead(\$incidentUid: String!) {
+    markMessagesAsRead(incidentUid: \$incidentUid) {
+      status
+      message
+      data
+    }
+  }
+''';
+
+// ============================================================================
+// CHAT MESSAGE QUERIES
+// ============================================================================
+
+const String getChatMessageQuery = '''
+  query GetChatMessage(\$uid: String!) {
+    getChatMessage(uid: \$uid) {
+      status
+      message
+      data {
+        uid
+        message
+        messageType
+        sentAt
+        sender {
+          uid
+          name
+          phoneNumber
+        }
+      }
+    }
+  }
+''';
+
+const String getIncidentMessagesQuery = '''
+  query GetIncidentMessages(\$incidentUid: String!, \$pageableParam: PageableParamInput!) {
+    getIncidentMessages(incidentUid: \$incidentUid, pageableParam: \$pageableParam) {
+      status
+      message
+      data {
+        content {
+          uid
+          message
+          messageType
+          sentAt
+          sender {
+            uid
+            name
+            phoneNumber
+          }
+        }
+        totalElements
+        totalPages
+        number
+      }
+    }
+  }
+''';
+
+const String getAllIncidentMessagesQuery = '''
+  query GetAllIncidentMessages(\$incidentUid: String!) {
+    getAllIncidentMessages(incidentUid: \$incidentUid) {
+      status
+      message
+      data {
+        uid
+        message
+        messageType
+        sentAt
+        sender {
+          uid
+          name
+          phoneNumber
+        }
+      }
+    }
+  }
+''';
+
+const String getUnreadMessageCountQuery = '''
+  query GetUnreadMessageCount(\$incidentUid: String!) {
+    getUnreadMessageCount(incidentUid: \$incidentUid) {
+      status
+      message
+      data
+    }
+  }
+''';
+
 
