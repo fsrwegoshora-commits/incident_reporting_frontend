@@ -7,8 +7,16 @@ plugins {
 
 android {
     namespace = "com.example.incident_reporting_frontend"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
+
+    defaultConfig {
+        applicationId = "com.example.incident_reporting_frontend"
+        minSdk = 23
+        targetSdk = 36
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+    }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
@@ -17,17 +25,6 @@ android {
 
     kotlinOptions {
         jvmTarget = JavaVersion.VERSION_11.toString()
-    }
-
-    defaultConfig {
-        // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.incident_reporting_frontend"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
-        targetSdk = flutter.targetSdkVersion
-        versionCode = flutter.versionCode
-        versionName = flutter.versionName
     }
 
     buildTypes {

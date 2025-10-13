@@ -4,6 +4,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:incident_reporting_frontend/screens/register_screen.dart';
+import 'package:incident_reporting_frontend/screens/report_incident_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/graphql_service.dart';
 import '../theme/ShiftStatus.dart';
@@ -282,15 +283,36 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   void _navigateToReportIncident() {
     showDialog(
       context: context,
-      barrierDismissible: true,
+      barrierDismissible: false,
       builder: (_) => _buildNearbyStationsDialog(),
     );
+
+    // Start loading location
     _getCurrentLocation();
   }
 
   void _selectStationForReport(Map<String, dynamic> station) {
+    // Validate that we have position
+    if (_currentPosition == null) {
+      _showSnackBar('Location not available', isError: true);
+      return;
+    }
+    // Close the station selection dialog
     Navigator.of(context).pop();
-    _showSnackBar('Selected: ${station['name']}');
+
+    // Navigate to Report Incident Screen
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ReportIncidentScreen(
+          selectedStation: station,
+          userPosition: _currentPosition!,
+        ),
+      ),
+    ).then((_) {
+      // Refresh dashboard when coming back
+      _loadUserData();
+    });
   }
 
   void _openUserManagement() {
@@ -1802,11 +1824,17 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // UI COMPONENTS - Nearby Stations Dialog
   // ============================================================================
 
+// ============================================================================
+// NEARBY STATIONS DIALOG (Enhanced)
+// ============================================================================
+
   Widget _buildNearbyStationsDialog() {
     return Dialog(
       backgroundColor: Colors.transparent,
       child: Container(
-        constraints: BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.8),
+        constraints: BoxConstraints(
+          maxHeight: MediaQuery.of(context).size.height * 0.8,
+        ),
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(24),
@@ -1817,89 +1845,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             return Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Container(
-                  padding: EdgeInsets.all(20),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
-                    ),
-                    borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                  ),
-                  child: Row(
-                    children: [
-                      Icon(Icons.location_city_rounded, color: Colors.white, size: 24),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'Nearby Stations',
-                              style: GoogleFonts.poppins(
-                                fontSize: 18,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
-                            ),
-                            Text(
-                              'Select your preferred station',
-                              style: GoogleFonts.poppins(
-                                fontSize: 12,
-                                color: Colors.white.withOpacity(0.8),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      IconButton(
-                        icon: Icon(Icons.close_rounded, color: Colors.white),
-                        onPressed: () => Navigator.pop(context),
-                      ),
-                    ],
-                  ),
-                ),
+                // Header
+                _buildDialogHeader(),
 
+                // Current Location Info
                 if (_currentPosition != null)
-                  Container(
-                    margin: EdgeInsets.all(20),
-                    padding: EdgeInsets.all(16),
-                    decoration: BoxDecoration(
-                      color: AppTheme.successGreen.withOpacity(0.1),
-                      borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: AppTheme.successGreen.withOpacity(0.3)),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.my_location_rounded, color: AppTheme.successGreen, size: 20),
-                        SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Your Location',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.w600,
-                                  color: Color(0xFF1A1F36),
-                                ),
-                              ),
-                              Text(
-                                _currentLocationName ?? 'Loading...',
-                                style: GoogleFonts.poppins(
-                                  fontSize: 12,
-                                  color: Color(0xFF8F9BB3),
-                                ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  _buildCurrentLocationCard(),
 
+                // Stations List
                 Flexible(
                   child: snapshot.connectionState == ConnectionState.waiting
                       ? _buildDialogLoading()
@@ -1908,59 +1861,313 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                       : _buildDialogStationsList(),
                 ),
 
+                // Footer - Cancel button only (selection navigates directly)
+                _buildDialogFooter(),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+// ============================================================================
+// DIALOG COMPONENTS
+// ============================================================================
+
+  Widget _buildDialogHeader() {
+    return Container(
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+        ),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.location_city_rounded, color: Colors.white, size: 24),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Nearby Stations',
+                  style: GoogleFonts.poppins(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+                Text(
+                  'Select station to report incident',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Colors.white.withOpacity(0.8),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          IconButton(
+            icon: Icon(Icons.close_rounded, color: Colors.white),
+            onPressed: () => Navigator.pop(context),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCurrentLocationCard() {
+    return Container(
+      margin: EdgeInsets.all(20),
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppTheme.successGreen.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: AppTheme.successGreen.withOpacity(0.3)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: EdgeInsets.all(8),
+            decoration: BoxDecoration(
+              color: AppTheme.successGreen.withOpacity(0.2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.my_location_rounded,
+              color: AppTheme.successGreen,
+              size: 20,
+            ),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Your Location',
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1F36),
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  _currentLocationName ?? 'Loading...',
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    color: Color(0xFF8F9BB3),
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppTheme.successGreen,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
                 Container(
-                  padding: EdgeInsets.all(20),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: OutlinedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: OutlinedButton.styleFrom(
-                            padding: EdgeInsets.symmetric(vertical: 14),
-                            side: BorderSide(color: Color(0xFFE4E9F2)),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: Text(
-                            'Cancel',
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    shape: BoxShape.circle,
+                  ),
+                ),
+                SizedBox(width: 6),
+                Text(
+                  'Active',
+                  style: GoogleFonts.poppins(
+                    fontSize: 10,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogStationsList() {
+    return ListView.separated(
+      padding: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+      shrinkWrap: true,
+      itemCount: _nearbyStations.length,
+      separatorBuilder: (_, __) => SizedBox(height: 12),
+      itemBuilder: (context, index) {
+        final station = _nearbyStations[index];
+        final name = station['name'] ?? 'Unknown Station';
+        final distance = station['temporaryDistance'] ?? 0.0;
+        final contact = station['contactInfo'] ?? 'N/A';
+        final address = station['address'] ?? '';
+
+        return InkWell(
+          onTap: () => _selectStationForReport(station),
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: Color(0xFFF8F9FC),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Color(0xFFE4E9F2)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF2E5BFF).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.local_police_rounded,
+                        color: Color(0xFF2E5BFF),
+                        size: 24,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            name,
                             style: GoogleFonts.poppins(
                               fontSize: 14,
-                              fontWeight: FontWeight.w600,
+                              fontWeight: FontWeight.w700,
                               color: Color(0xFF1A1F36),
                             ),
                           ),
+                          if (address.isNotEmpty)
+                            Text(
+                              address,
+                              style: GoogleFonts.poppins(
+                                fontSize: 11,
+                                color: Color(0xFF8F9BB3),
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                        ],
+                      ),
+                    ),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: AppTheme.successGreen.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            Icons.location_on_rounded,
+                            size: 12,
+                            color: AppTheme.successGreen,
+                          ),
+                          SizedBox(width: 4),
+                          Text(
+                            '${distance.toStringAsFixed(1)}km',
+                            style: GoogleFonts.poppins(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              color: AppTheme.successGreen,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 12),
+                Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.phone_rounded,
+                        size: 14,
+                        color: Color(0xFF2E5BFF),
+                      ),
+                      SizedBox(width: 8),
+                      Text(
+                        contact,
+                        style: GoogleFonts.poppins(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                          color: Color(0xFF1A1F36),
                         ),
                       ),
-                      SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Color(0xFF2E5BFF),
-                            padding: EdgeInsets.symmetric(vertical: 14),
-                            elevation: 0,
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          child: Text(
-                            'Continue',
-                            style: GoogleFonts.poppins(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w600,
-                              color: Colors.white,
-                            ),
-                          ),
-                        ),
+                      Spacer(),
+                      Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: Color(0xFF2E5BFF),
                       ),
                     ],
                   ),
                 ),
               ],
-            );
-          },
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDialogFooter() {
+    return Container(
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        border: Border(
+          top: BorderSide(color: Color(0xFFE4E9F2)),
         ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton(
+              onPressed: () => Navigator.pop(context),
+              style: OutlinedButton.styleFrom(
+                padding: EdgeInsets.symmetric(vertical: 14),
+                side: BorderSide(color: Color(0xFFE4E9F2)),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+              ),
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.poppins(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1981,7 +2188,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 shape: BoxShape.circle,
               ),
               child: Center(
-                child: CircularProgressIndicator(strokeWidth: 2),
+                child: CircularProgressIndicator(
+                  strokeWidth: 3,
+                  valueColor: AlwaysStoppedAnimation(Color(0xFF2E5BFF)),
+                ),
               ),
             ),
           ),
@@ -1992,6 +2202,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               fontSize: 14,
               fontWeight: FontWeight.w600,
               color: Color(0xFF1A1F36),
+            ),
+          ),
+          SizedBox(height: 8),
+          Text(
+            'Please wait',
+            style: GoogleFonts.poppins(
+              fontSize: 12,
+              color: Color(0xFF8F9BB3),
             ),
           ),
         ],
@@ -2005,103 +2223,64 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.search_off_rounded, size: 48, color: Color(0xFF8F9BB3)),
-          SizedBox(height: 16),
+          Container(
+            width: 80,
+            height: 80,
+            decoration: BoxDecoration(
+              color: Color(0xFFE4E9F2),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              Icons.search_off_rounded,
+              size: 40,
+              color: Color(0xFF8F9BB3),
+            ),
+          ),
+          SizedBox(height: 20),
           Text(
-            'No stations found',
+            'No Stations Found',
             style: GoogleFonts.poppins(
-              fontSize: 14,
-              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              fontWeight: FontWeight.w700,
               color: Color(0xFF1A1F36),
             ),
           ),
           SizedBox(height: 8),
           Text(
-            'No stations within ${_maxDistance.toInt()}km',
+            'No police stations within ${_maxDistance.toInt()}km radius',
             style: GoogleFonts.poppins(
               fontSize: 12,
               color: Color(0xFF8F9BB3),
             ),
+            textAlign: TextAlign.center,
+          ),
+          SizedBox(height: 20),
+          OutlinedButton(
+            onPressed: () {
+              setState(() => _maxDistance = _maxDistance + 50);
+              _fetchNearbyPoliceStations(
+                _currentPosition!.latitude,
+                _currentPosition!.longitude,
+              );
+            },
+            style: OutlinedButton.styleFrom(
+              padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              side: BorderSide(color: Color(0xFF2E5BFF)),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ),
+            child: Text(
+              'Search Wider Area',
+              style: GoogleFonts.poppins(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF2E5BFF),
+              ),
+            ),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildDialogStationsList() {
-    return ListView.separated(
-      padding: EdgeInsets.all(20),
-      shrinkWrap: true,
-      itemCount: _nearbyStations.length,
-      separatorBuilder: (_, __) => SizedBox(height: 12),
-      itemBuilder: (context, index) {
-        final station = _nearbyStations[index];
-        final name = station['name'] ?? 'Unknown';
-        final distance = station['temporaryDistance'] ?? 0.0;
-        final contact = station['contactInfo'] ?? 'N/A';
-
-        return InkWell(
-          onTap: () => _selectStationForReport(station),
-          borderRadius: BorderRadius.circular(12),
-          child: Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Color(0xFFF8F9FC),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  padding: EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Color(0xFF2E5BFF).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.local_police_rounded, color: Color(0xFF2E5BFF), size: 20),
-                ),
-                SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        name,
-                        style: GoogleFonts.poppins(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Color(0xFF1A1F36),
-                        ),
-                      ),
-                      Text(
-                        contact,
-                        style: GoogleFonts.poppins(
-                          fontSize: 11,
-                          color: Color(0xFF8F9BB3),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: AppTheme.successGreen.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Text(
-                    '${distance.toStringAsFixed(1)}km',
-                    style: GoogleFonts.poppins(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      color: AppTheme.successGreen,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
   }
 
