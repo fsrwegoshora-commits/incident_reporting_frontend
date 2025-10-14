@@ -698,6 +698,16 @@ const String createIncidentMutation = '''
         longitude
         status
         reportedAt
+        liveCallRequested
+         assignedOfficer {
+          uid
+          badgeNumber
+          code
+          userAccount {
+            name
+            phoneNumber
+          }
+        }
         assignedStation {
           uid
           name
@@ -719,7 +729,7 @@ const String updateIncidentMutation = '''
         resolvedAt
         assignedOfficer {
           uid
-          user {
+          userAccount {
             name
             phoneNumber
           }
@@ -738,7 +748,7 @@ const String assignOfficerToIncidentMutation = '''
         uid
         assignedOfficer {
           uid
-          user {
+          userAccount {
             name
           }
         }
@@ -792,11 +802,11 @@ const String getIncidentQuery = '''
         }
         assignedOfficer {
           uid
-          user {
+          userAccount {
             name
             phoneNumber
           }
-          rank
+          code
           badgeNumber
         }
       }
@@ -847,7 +857,7 @@ const String getStationIncidentsQuery = '''
             phoneNumber
           }
           assignedOfficer {
-            user {
+            userAccount {
               name
             }
           }
@@ -1051,6 +1061,68 @@ const String getUnreadMessageCountQuery = '''
       status
       message
       data
+    }
+  }
+''';
+
+// ============================================================================
+// OFFICER SHIFT QUERIES
+// ============================================================================
+
+const String getCurrentOfficerOnDutyQuery = '''
+  query GetCurrentOfficerOnDuty(\$stationUid: String!) {
+    getCurrentOfficerOnDuty(stationUid: \$stationUid) {
+      status
+      message
+      data {
+        uid
+        shiftType
+        shiftDate
+        startTime
+        endTime
+        officer {
+          uid
+          badgeNumber
+          code
+          userAccount {
+            uid
+            name
+            phoneNumber
+          }
+          station {
+          name
+          contactInfo
+         }
+        }
+      }
+    }
+  }
+''';
+
+const String getAllOfficersOnDutyNowQuery = '''
+  query GetAllOfficersOnDutyNow(\$stationUid: String) {
+    getAllOfficersOnDutyNow(stationUid: \$stationUid) {
+      status
+      message
+      data {
+        uid
+        shiftType
+        shiftDate
+        startTime
+        endTime
+        officer {
+          uid
+          badgeNumber
+          code
+          userAccount {
+            name
+            phoneNumber
+          }
+          station {
+          name
+         }
+        } 
+      }
     }
   }
 ''';

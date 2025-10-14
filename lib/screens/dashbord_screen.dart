@@ -51,7 +51,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   String? _currentLocationName;
   List<Map<String, dynamic>> _nearbyStations = [];
   bool _isLoadingNearbyStations = false;
-  double _maxDistance = 100.0;
+  double _maxDistance = 400.0;
 
   // UI State
   bool _isLoading = true;
