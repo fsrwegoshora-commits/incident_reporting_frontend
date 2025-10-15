@@ -820,7 +820,6 @@ const String getMyIncidentsQuery = '''
       status
       message
       data {
-        content {
           uid
           title
           type
@@ -830,11 +829,11 @@ const String getMyIncidentsQuery = '''
           assignedStation {
             name
           }
-        }
-        totalElements
-        totalPages
-        number
-      }
+       }
+       page
+         size
+         pages
+        elements
     }
   }
 ''';
@@ -844,8 +843,38 @@ const String getStationIncidentsQuery = '''
     getStationIncidents(pageableParam: \$pageableParam, status: \$status) {
       status
       message
+      data {     
+          uid
+          title
+          type
+          location
+          status
+          reportedAt
+          reportedBy {
+            name
+            phoneNumber
+          }
+          assignedOfficer {
+            userAccount {
+              name
+            }
+          }
+      }
+        page
+        size
+        pages
+        elements
+      
+    }
+  }
+''';
+
+const String getOfficerIncidentsQuery = '''
+  query GetOfficerIncidents(\$pageableParam: PageableParamInput!, \$status: IncidentStatus) {
+    getOfficerIncidents(pageableParam: \$pageableParam, status: \$status) {
+      status
+      message
       data {
-        content {
           uid
           title
           type
@@ -862,35 +891,10 @@ const String getStationIncidentsQuery = '''
             }
           }
         }
-        totalElements
-        totalPages
-        number
-      }
-    }
-  }
-''';
-
-const String getOfficerIncidentsQuery = '''
-  query GetOfficerIncidents(\$pageableParam: PageableParamInput!, \$status: IncidentStatus) {
-    getOfficerIncidents(pageableParam: \$pageableParam, status: \$status) {
-      status
-      message
-      data {
-        content {
-          uid
-          title
-          type
-          location
-          status
-          reportedAt
-          reportedBy {
-            name
-            phoneNumber
-          }
-        }
-        totalElements
-        totalPages
-      }
+        page
+        size
+        pages
+        elements
     }
   }
 ''';

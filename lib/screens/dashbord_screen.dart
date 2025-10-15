@@ -7,10 +7,11 @@ import 'package:incident_reporting_frontend/screens/register_screen.dart';
 import 'package:incident_reporting_frontend/screens/report_incident_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/graphql_service.dart';
-import '../theme/ShiftStatus.dart';
 import '../utils/auth_utils.dart';
 import '../utils/graphql_query.dart';
 import '../theme/app_theme.dart';
+import 'my_incidents_screen.dart';
+import 'officer_incidents_screen.dart';
 import 'user_management_screen.dart';
 import 'police_station_management_screen.dart';
 
@@ -335,6 +336,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
     Navigator.pushReplacementNamed(context, '/');
+  }
+
+  void _openStationIncidents() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => OfficerIncidentsScreen()));
+  }
+
+  void _openOfficerIncidents() {
+    Navigator.push(context, MaterialPageRoute(builder: (_) => OfficerIncidentsScreen()));
   }
 
   // ============================================================================
@@ -898,6 +907,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Shifts Header
           Row(
             children: [
               Text(
@@ -927,12 +937,18 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ],
           ),
           SizedBox(height: 16),
+
+          // Shifts List
           if (_isLoadingShifts)
             _buildShiftsLoading()
           else if (_officerShifts.isEmpty)
             _buildNoShifts()
           else
-            ..._officerShifts.take(5).map((shift) => _buildImprovedShiftCard(shift)).toList(),
+            ..._officerShifts.take(3).map((shift) => _buildImprovedShiftCard(shift)).toList(),
+
+          // Officer Incidents Card - ADD THIS SECTION
+          SizedBox(height: 24),
+          _buildOfficerIncidentsCard(),
         ],
       ),
     );
@@ -1380,7 +1396,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // ============================================================================
   // UI COMPONENTS - Admin Section
   // ============================================================================
-
   Widget _buildAdminSection() {
     return Container(
       margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
@@ -1414,6 +1429,18 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 title: 'Police\nStations',
                 onTap: _openPoliceStationManagement,
               ),
+              _buildAdminCard(
+                icon: Icons.description_rounded,
+                title: 'Station\nIncidents',
+                onTap: _openStationIncidents,
+              ),
+              _buildAdminCard(
+                icon: Icons.analytics_rounded,
+                title: 'Reports\n& Analytics',
+                onTap: () {
+                  _showSnackBar('Reports feature coming soon');
+                },
+              ),
             ],
           ),
         ],
@@ -1436,8 +1463,15 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ),
           ),
           SizedBox(height: 16),
+
+          // Citizen Incidents Card
+          _buildCitizenIncidentsCard(),
+
+          SizedBox(height: 16),
+
+          // Recent incidents list (optional)
           Container(
-            padding: EdgeInsets.all(32),
+            padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(16),
@@ -1467,6 +1501,75 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildCitizenIncidentsCard() {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(context, MaterialPageRoute(builder: (_) => MyIncidentsScreen()));
+      },
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF00B894), Color(0xFF00A085)],
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0xFF00B894).withOpacity(0.3),
+              blurRadius: 15,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.list_alt_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'My Incident Reports',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'View all your reported incidents',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.white.withOpacity(0.8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              color: Colors.white.withOpacity(0.7),
+              size: 16,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -1512,6 +1615,77 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   // ============================================================================
+// OFFICER INCIDENTS CARD
+// ============================================================================
+
+  Widget _buildOfficerIncidentsCard() {
+    return GestureDetector(
+      onTap: _openOfficerIncidents,
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [Color(0xFF1A3A6F), Color(0xFF2E5BFF)],
+          ),
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0xFF2E5BFF).withOpacity(0.3),
+              blurRadius: 15,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Icon(
+                Icons.assignment_rounded,
+                color: Colors.white,
+                size: 24,
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'My Assigned Incidents',
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(height: 4),
+                  Text(
+                    'View and manage incidents assigned to you',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Colors.white.withOpacity(0.8),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              color: Colors.white.withOpacity(0.7),
+              size: 16,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ============================================================================
   // UI COMPONENTS - Modern Bottom Navigation
   // ============================================================================
 
@@ -1540,22 +1714,31 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 onTap: () {},
               ),
               _buildBottomNavIcon(
-                icon: Icons.analytics_rounded,
-                label: 'Track',
-                onTap: () {},
+                icon: Icons.description_rounded,
+                label: 'Reports',
+                onTap: () {
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => MyIncidentsScreen()),
+                  );
+                },
               ),
               SizedBox(width: 64), // Space for FAB
               _buildBottomNavIcon(
                 icon: Icons.forum_rounded,
-                label: 'Chat',
-                onTap: () {},
+                label: 'Chats',
+                onTap: () {
+                  // Same as Reports for now
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => MyIncidentsScreen()),
+                  );
+                },
               ),
               _buildBottomNavIcon(
                 icon: Icons.emergency_outlined,
                 label: 'Report',
-                onTap: () {
-                  _navigateToReportIncident();
-                },
+                onTap: _navigateToReportIncident,
               ),
             ],
           ),
