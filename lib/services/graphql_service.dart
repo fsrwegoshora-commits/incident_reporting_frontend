@@ -1,10 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 class GraphQLService {
-  final String endpoint = 'http://10.172.221.163:8080/graphql';
-  //final String endpoint = "http://localhost:8080/graphql";
+  final String endpoint = 'http://10.224.30.163:8080/graphql';
 
   /// 🔁 Send a GraphQL mutation with optional token
   Future<Map<String, dynamic>> sendMutation(
@@ -20,7 +20,6 @@ class GraphQLService {
     print("📡 Sending mutation to $endpoint");
     print("📄 Query: $query");
     print("📦 Variables: $variables");
-    print("🛡️ Headers: $headers");
 
     final response = await http.post(
       Uri.parse(endpoint),
@@ -32,7 +31,6 @@ class GraphQLService {
     );
 
     print("✅ Status code: ${response.statusCode}");
-    print("🧾 Response body: ${response.body}");
 
     return jsonDecode(response.body);
   }
@@ -48,11 +46,6 @@ class GraphQLService {
       if (token != null) "Authorization": "Bearer $token",
     };
 
-    print("📡 Sending query to $endpoint");
-    print("📄 Query: $query");
-    print("📦 Variables: $variables");
-    print("🛡️ Headers: $headers");
-
     final response = await http.post(
       Uri.parse(endpoint),
       headers: headers,
@@ -61,9 +54,6 @@ class GraphQLService {
         "variables": variables,
       }),
     );
-
-    print("✅ Status code: ${response.statusCode}");
-    print("🧾 Response body: ${response.body}");
 
     return jsonDecode(response.body);
   }
@@ -87,5 +77,86 @@ class GraphQLService {
     final token = prefs.getString("jwt_token");
     return sendQuery(query, variables, token: token);
   }
+
+  /// 📤 Upload file via GraphQL using Base64 (SPQR-friendly)
+  Future<Map<String, dynamic>> uploadFileWithGraphQL(
+      File file,
+      String mediaType,
+      ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString("jwt_token");
+
+      // Read file and encode it as Base64
+      final bytes = await file.readAsBytes();
+      final base64File = base64Encode(bytes);
+      final fileName = file.path.split('/').last;
+
+      // Prepare GraphQL mutation
+      final mutation = '''
+        mutation UploadMedia(\$base64File: String!, \$fileName: String!, \$mediaType: String!) {
+          uploadMedia(base64File: \$base64File, fileName: \$fileName, mediaType: \$mediaType) {
+            status
+            message
+            data {
+              fileUrl
+              fileName
+              originalFileName
+              fileSize
+              mediaType
+            }
+          }
+        }
+      ''';
+
+      final variables = {
+        "base64File": "data:${_getMimeType(fileName)};base64,$base64File",
+        "fileName": fileName,
+        "mediaType": mediaType.toUpperCase(),
+      };
+
+      final headers = {
+        "Content-Type": "application/json",
+        if (token != null) "Authorization": "Bearer $token",
+      };
+
+      print("📤 Uploading via GraphQL (base64): ${file.path}");
+      print("📁 Media type: $mediaType");
+
+      final response = await http.post(
+        Uri.parse(endpoint),
+        headers: headers,
+        body: jsonEncode({
+          "query": mutation,
+          "variables": variables,
+        }),
+      );
+
+      print("✅ Upload response code: ${response.statusCode}");
+      print("📄 Response body: ${response.body}");
+
+      return jsonDecode(response.body);
+    } catch (e) {
+      print("❌ Upload error: $e");
+      return {'errors': [{'message': 'Upload failed: $e'}]};
+    }
+  }
+
+  /// 🧩 Helper method to detect MIME type based on extension
+  String _getMimeType(String fileName) {
+    final ext = fileName.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'mp4':
+        return 'video/mp4';
+      case 'mp3':
+        return 'audio/mpeg';
+      default:
+        return 'application/octet-stream';
+    }
+  }
 }
-//final String endpoint = "http://localhost:8080/graphql";

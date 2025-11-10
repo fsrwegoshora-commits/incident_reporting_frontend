@@ -941,7 +941,7 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
             'location': _locationController.text.trim(),
             'latitude': widget.userPosition.latitude,
             'longitude': widget.userPosition.longitude,
-            'liveCallRequested': _isLiveCallRequested,
+            'isLiveCallRequested': _isLiveCallRequested,
             'assignedOfficerUid': _assignedOfficerUid,
             'assignedStationUid': widget.selectedStation['uid'],
           },

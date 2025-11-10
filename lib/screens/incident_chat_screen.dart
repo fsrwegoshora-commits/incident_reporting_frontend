@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
+import 'package:incident_reporting_frontend/screens/video_player_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:photo_view/photo_view.dart';
 import 'dart:io';
 import 'dart:async';
 
@@ -31,28 +33,33 @@ class IncidentChatScreen extends StatefulWidget {
 class _IncidentChatScreenState extends State<IncidentChatScreen> {
   final _messageController = TextEditingController();
   final _scrollController = ScrollController();
-  final _mediaService = MediaService();
-  final _voiceRecorder = VoiceRecorderService();
   final _imagePicker = ImagePicker();
   final _audioPlayer = AudioPlayer();
+
+  // Initialize services
+  late GraphQLService _gqlService;
+  late MediaService _mediaService;
+  late VoiceRecorderService _voiceRecorder;
 
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
   bool _isSending = false;
   bool _isRecording = false;
   int _recordDuration = 0;
+  double _uploadProgress = 0.0;
+  bool _showProgressDialog = false;
 
   Timer? _refreshTimer;
   Timer? _recordingTimer;
-
   String? _playingAudioUrl;
 
   @override
   void initState() {
     super.initState();
+    _initializeServices();
     _loadMessages();
 
-    // Auto-refresh every 5 seconds (simulating real-time)
+    // Auto-refresh every 5 seconds
     _refreshTimer = Timer.periodic(Duration(seconds: 5), (_) {
       _loadMessages(silent: true);
     });
@@ -69,6 +76,12 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     super.dispose();
   }
 
+  void _initializeServices() {
+    _gqlService = GraphQLService();
+    _mediaService = MediaService(_gqlService);
+    _voiceRecorder = VoiceRecorderService();
+  }
+
   // ==========================================================================
   // DATA LOADING
   // ==========================================================================
@@ -79,8 +92,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     }
 
     try {
-      final gql = GraphQLService();
-      final response = await gql.sendAuthenticatedQuery(
+      final response = await _gqlService.sendAuthenticatedQuery(
         getAllIncidentMessagesQuery,
         {'incidentUid': widget.incidentUid},
       );
@@ -103,6 +115,10 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         // Scroll to bottom
         if (_messages.isNotEmpty) {
           _scrollToBottom();
+        }
+      } else {
+        if (!silent) {
+          _showSnackBar(result['message'] ?? 'Failed to load messages', isError: true);
         }
       }
     } catch (e) {
@@ -140,8 +156,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     setState(() => _isSending = true);
 
     try {
-      final gql = GraphQLService();
-      final response = await gql.sendAuthenticatedQuery(
+      final response = await _gqlService.sendAuthenticatedQuery(
         sendChatMessageMutation,
         {
           'chatMessageDto': {
@@ -172,37 +187,172 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   }
 
   // ==========================================================================
-  // SEND MEDIA MESSAGE
+  // BASE64 MEDIA UPLOAD METHODS
   // ==========================================================================
 
-  Future<void> _sendMediaMessage(String mediaUrl, String messageType) async {
+  Future<void> _uploadAndSendMedia(File file, String type) async {
+    _showUploadProgressDialog();
+
+    try {
+      print('🚀 Starting Base64 upload for: ${file.path}');
+
+      // Use the Base64 upload method
+      final mediaDetails = await _mediaService.uploadFileWithDetails(file, type);
+
+      _hideUploadProgressDialog();
+
+      if (mediaDetails == null) {
+        _showSnackBar('Failed to upload ${type.toLowerCase()}', isError: true);
+        return;
+      }
+
+      await _sendMediaMessageWithDetails(
+        mediaUrl: mediaDetails['fileUrl'],
+        messageType: type,
+        fileName: mediaDetails['fileName'],
+        fileSize: mediaDetails['fileSize'],
+        originalFileName: mediaDetails['originalFileName'],
+        duration: null,
+      );
+    } catch (e) {
+      _hideUploadProgressDialog();
+      _showSnackBar('Upload error: ${e.toString()}', isError: true);
+    }
+  }
+
+  Future<void> _uploadAndSendVoiceNote(String filePath) async {
+    _showUploadProgressDialog();
+
+    try {
+      final file = File(filePath);
+      print('🎙️ Starting voice note upload...');
+
+      // Use the Base64 upload method for voice notes
+      final mediaDetails = await _mediaService.uploadFileWithDetails(file, 'AUDIO');
+
+      _hideUploadProgressDialog();
+
+      if (mediaDetails == null) {
+        _showSnackBar('Failed to upload voice note', isError: true);
+        return;
+      }
+
+      await _sendMediaMessageWithDetails(
+        mediaUrl: mediaDetails['fileUrl'],
+        messageType: 'AUDIO',
+        fileName: mediaDetails['fileName'],
+        fileSize: mediaDetails['fileSize'],
+        originalFileName: 'Voice Note',
+        duration: _recordDuration,
+      );
+    } catch (e) {
+      _hideUploadProgressDialog();
+      _showSnackBar('Voice note upload error: ${e.toString()}', isError: true);
+    }
+  }
+
+  void _showUploadProgressDialog() {
+    if (!mounted) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            CircularProgressIndicator(),
+            SizedBox(height: 16),
+            Text(
+              'Uploading file...',
+              style: GoogleFonts.poppins(),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Please wait',
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                color: Colors.grey,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _hideUploadProgressDialog() {
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+  }
+
+  Future<void> _sendMediaMessageWithDetails({
+    required String mediaUrl,
+    required String messageType,
+    required String fileName,
+    required int fileSize,
+    required String originalFileName,
+    required int? duration,
+  }) async {
     setState(() => _isSending = true);
 
     try {
-      final gql = GraphQLService();
-      final response = await gql.sendAuthenticatedQuery(
+      String fullMediaUrl = mediaUrl;
+      if (!mediaUrl.startsWith('http')) {
+        fullMediaUrl = 'http://10.224.30.163:8080$mediaUrl';
+      }
+
+      // Prepare the complete message DTO
+      final chatMessageDto = {
+        'incidentUid': widget.incidentUid,
+        'message': originalFileName,
+        'messageType': messageType,
+        'mediaUrl': fullMediaUrl,
+        'mediaFileName': fileName,
+        'mediaFileSize': fileSize,
+      };
+
+      // Add duration for audio messages
+      if (duration != null && duration > 0) {
+        chatMessageDto['mediaDuration'] = duration;
+      }
+
+      print('📤 Sending media message to GraphQL:');
+      print('🔹 Incident UID: ${widget.incidentUid}');
+      print('🔹 Message Type: $messageType');
+      print('🔹 Media URL: $fullMediaUrl');
+      print('🔹 File Name: $fileName');
+      print('🔹 File Size: $fileSize');
+      print('🔹 Full DTO: $chatMessageDto');
+
+      final response = await _gqlService.sendAuthenticatedQuery(
         sendChatMessageMutation,
         {
-          'chatMessageDto': {
-            'incidentUid': widget.incidentUid,
-            'message': mediaUrl,
-            'messageType': messageType,
-          },
+          'chatMessageDto': chatMessageDto,
         },
       );
 
+      print('📥 Send Message Response: $response');
+
       if (response.containsKey('errors')) {
-        _showSnackBar('Failed to send message', isError: true);
+        print('❌ GraphQL errors: ${response['errors']}');
+        _showSnackBar('Failed to send message: ${response['errors']}', isError: true);
         return;
       }
 
       final result = response['data']?['sendChatMessage'];
+      print('🔍 Send Message Result: $result');
+
       if (result['status'] == 'Success') {
+        _showSnackBar('${messageType.toLowerCase()} sent successfully');
         await _loadMessages(silent: true);
-        _showSnackBar('Media sent successfully');
+      } else {
+        print('❌ Send failed: ${result['message']}');
+        _showSnackBar(result['message'] ?? 'Failed to send media', isError: true);
       }
     } catch (e) {
-      _showSnackBar('Error: ${e.toString()}', isError: true);
+      print('❌ Send error: $e');
+      _showSnackBar('Send error: ${e.toString()}', isError: true);
     } finally {
       setState(() => _isSending = false);
     }
@@ -364,20 +514,6 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     );
   }
 
-  Future<void> _uploadAndSendVoiceNote(String filePath) async {
-    _showSnackBar('Uploading voice note...');
-
-    final file = File(filePath);
-    final audioUrl = await _mediaService.uploadFile(file, 'audio');
-
-    if (audioUrl == null) {
-      _showSnackBar('Failed to upload voice note', isError: true);
-      return;
-    }
-
-    await _sendMediaMessage(audioUrl, 'AUDIO');
-  }
-
   // ==========================================================================
   // IMAGE/VIDEO PICKER
   // ==========================================================================
@@ -447,19 +583,6 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     } catch (e) {
       _showSnackBar('Failed to pick video: $e', isError: true);
     }
-  }
-
-  Future<void> _uploadAndSendMedia(File file, String type) async {
-    _showSnackBar('Uploading ${type.toLowerCase()}...');
-
-    final url = await _mediaService.uploadFile(file, type.toLowerCase());
-
-    if (url == null) {
-      _showSnackBar('Failed to upload $type', isError: true);
-      return;
-    }
-
-    await _sendMediaMessage(url, type);
   }
 
   // ==========================================================================
@@ -566,27 +689,31 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         final isMyMessage = message['sender']['uid'] == widget.currentUserUid;
 
         return _buildMessageBubble(
-          message: message['message'],
-          senderName: message['sender']['name'],
-          sentAt: message['sentAt'],
+          message: message,
           isMyMessage: isMyMessage,
-          messageType: message['messageType'],
         );
       },
     );
   }
 
   // ==========================================================================
-  // MESSAGE BUBBLE
+  // MESSAGE BUBBLE - ENHANCED FOR MEDIA
   // ==========================================================================
 
   Widget _buildMessageBubble({
-    required String message,
-    required String senderName,
-    required String sentAt,
+    required Map<String, dynamic> message,
     required bool isMyMessage,
-    required String messageType,
   }) {
+    final sender = message['sender'];
+    final senderName = sender['name'];
+    final sentAt = message['sentAt'];
+    final messageType = message['messageType'];
+    final content = message['message'];
+    final mediaUrl = message['mediaUrl'];
+    final mediaFileName = message['mediaFileName'];
+    final fileSize = message['mediaFileSize'];
+    final duration = message['mediaDuration'];
+
     return Padding(
       padding: EdgeInsets.only(bottom: 12),
       child: Row(
@@ -626,7 +753,15 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
                     ),
                   ),
 
-                _buildMessageContent(message, messageType, isMyMessage),
+                _buildMessageContent(
+                  messageType: messageType,
+                  content: content,
+                  mediaUrl: mediaUrl,
+                  mediaFileName: mediaFileName,
+                  fileSize: fileSize,
+                  duration: duration,
+                  isMyMessage: isMyMessage,
+                ),
 
                 SizedBox(height: 4),
                 Padding(
@@ -656,20 +791,34 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     );
   }
 
-  Widget _buildMessageContent(String content, String messageType, bool isMyMessage) {
+  Widget _buildMessageContent({
+    required String messageType,
+    required String content,
+    required String? mediaUrl,
+    required String? mediaFileName,
+    required int? fileSize,
+    required int? duration,
+    required bool isMyMessage,
+  }) {
     switch (messageType) {
       case 'TEXT':
         return _buildTextMessage(content, isMyMessage);
       case 'IMAGE':
-        return _buildImageMessage(content);
+        return _buildImageMessage(mediaUrl ?? content, mediaFileName, fileSize);
       case 'AUDIO':
-        return _buildAudioMessage(content, isMyMessage);
+        return _buildAudioMessage(
+            mediaUrl ?? content,
+            isMyMessage,
+            duration,
+            fileSize,
+            mediaFileName ?? 'Audio Message'
+        );
       case 'VIDEO':
-        return _buildVideoMessage(content);
+        return _buildVideoMessage(mediaUrl ?? content, mediaFileName, fileSize);
       case 'SYSTEM':
         return _buildSystemMessage(content);
       default:
-        return _buildTextMessage(content, isMyMessage);
+        return _buildTextMessage(content ?? 'Unknown message type', isMyMessage);
     }
   }
 
@@ -698,76 +847,113 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     );
   }
 
-  Widget _buildImageMessage(String imageUrl) {
-    return GestureDetector(
-      onTap: () => _showFullScreenImage(imageUrl),
-      child: Hero(
-        tag: imageUrl,
-        child: Container(
-          constraints: BoxConstraints(maxWidth: 250, maxHeight: 300),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.1),
-                blurRadius: 10,
-                offset: Offset(0, 4),
+  Widget _buildImageMessage(String imageUrl, String? fileName, int? fileSize) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: () => _showFullScreenImage(imageUrl),
+          child: Hero(
+            tag: imageUrl,
+            child: Container(
+              constraints: BoxConstraints(maxWidth: 250, maxHeight: 300),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(16),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.1),
+                    blurRadius: 10,
+                    offset: Offset(0, 4),
+                  ),
+                ],
               ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(16),
-            child: Image.network(
-              imageUrl,
-              fit: BoxFit.cover,
-              loadingBuilder: (context, child, progress) {
-                if (progress == null) return child;
-                return Container(
-                  width: 250,
-                  height: 200,
-                  color: Colors.grey[200],
-                  child: Center(
-                    child: CircularProgressIndicator(
-                      value: progress.expectedTotalBytes != null
-                          ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
-                          : null,
-                    ),
-                  ),
-                );
-              },
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  width: 250,
-                  height: 200,
-                  color: Colors.grey[200],
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                      SizedBox(height: 8),
-                      Text('Failed to load image'),
-                    ],
-                  ),
-                );
-              },
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16),
+                child: Image.network(
+                  imageUrl,
+                  fit: BoxFit.cover,
+                  loadingBuilder: (context, child, progress) {
+                    if (progress == null) return child;
+                    return Container(
+                      width: 250,
+                      height: 200,
+                      color: Colors.grey[200],
+                      child: Center(
+                        child: CircularProgressIndicator(
+                          value: progress.expectedTotalBytes != null
+                              ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
+                              : null,
+                        ),
+                      ),
+                    );
+                  },
+                  errorBuilder: (context, error, stackTrace) {
+                    return Container(
+                      width: 250,
+                      height: 200,
+                      color: Colors.grey[200],
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.broken_image, size: 50, color: Colors.grey),
+                          SizedBox(height: 8),
+                          Text('Failed to load image'),
+                        ],
+                      ),
+                    );
+                  },
+                ),
+              ),
             ),
           ),
         ),
-      ),
+        if (fileName != null || fileSize != null) ...[
+          SizedBox(height: 4),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (fileName != null)
+                  Text(
+                    fileName,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      color: Color(0xFF8F9BB3),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                if (fileSize != null)
+                  Text(
+                    _mediaService.getFileSizeString(fileSize),
+                    style: GoogleFonts.poppins(
+                      fontSize: 9,
+                      color: Color(0xFF8F9BB3).withOpacity(0.7),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 
-  Widget _buildAudioMessage(String audioUrl, bool isMyMessage) {
+  Widget _buildAudioMessage(String audioUrl, bool isMyMessage, int? duration, int? fileSize, String fileName) {
     final isPlaying = _playingAudioUrl == audioUrl;
+    final durationText = duration != null ? _formatDuration(Duration(seconds: duration)) : 'Unknown duration';
+    final fileSizeText = fileSize != null ? _mediaService.getFileSizeString(fileSize) : '';
 
     return Container(
+      constraints: BoxConstraints(maxWidth: 280),
       padding: EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: isMyMessage ? Color(0xFF2E5BFF) : Colors.white,
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withOpacity(0.1),
             blurRadius: 8,
             offset: Offset(0, 2),
           ),
@@ -776,10 +962,11 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          // Play/Pause Button
           GestureDetector(
             onTap: () => _playAudio(audioUrl),
             child: Container(
-              padding: EdgeInsets.all(8),
+              padding: EdgeInsets.all(10),
               decoration: BoxDecoration(
                 color: isMyMessage
                     ? Colors.white.withOpacity(0.2)
@@ -789,118 +976,175 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
               child: Icon(
                 isPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
                 color: isMyMessage ? Colors.white : Color(0xFF2E5BFF),
-                size: 24,
+                size: 20,
               ),
             ),
           ),
           SizedBox(width: 12),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Icon(
-                    Icons.mic_rounded,
-                    size: 14,
-                    color: isMyMessage ? Colors.white : Color(0xFF2E5BFF),
+
+          // Audio Info
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  fileName,
+                  style: GoogleFonts.poppins(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                    color: isMyMessage ? Colors.white : Color(0xFF1A1F36),
                   ),
-                  SizedBox(width: 4),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                SizedBox(height: 2),
+                Text(
+                  durationText,
+                  style: GoogleFonts.poppins(
+                    fontSize: 10,
+                    color: isMyMessage ? Colors.white.withOpacity(0.8) : Color(0xFF8F9BB3),
+                  ),
+                ),
+                if (fileSizeText.isNotEmpty) ...[
+                  SizedBox(height: 2),
                   Text(
-                    'Voice Message',
+                    fileSizeText,
                     style: GoogleFonts.poppins(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: isMyMessage ? Colors.white : Color(0xFF1A1F36),
+                      fontSize: 9,
+                      color: isMyMessage ? Colors.white.withOpacity(0.6) : Color(0xFF8F9BB3).withOpacity(0.8),
                     ),
                   ),
                 ],
-              ),
-              Text(
-                isPlaying ? 'Playing...' : 'Tap to play',
-                style: GoogleFonts.poppins(
-                  fontSize: 10,
-                  color: isMyMessage
-                      ? Colors.white.withOpacity(0.8)
-                      : Color(0xFF8F9BB3),
+                SizedBox(height: 2),
+                Text(
+                  isPlaying ? 'Playing...' : 'Tap to play',
+                  style: GoogleFonts.poppins(
+                    fontSize: 9,
+                    color: isMyMessage ? Colors.white.withOpacity(0.7) : Color(0xFF8F9BB3),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildVideoMessage(String videoUrl) {
-    return GestureDetector(
-      onTap: () => _showVideoPlayer(videoUrl),
-      child: Container(
-        width: 250,
-        height: 200,
-        decoration: BoxDecoration(
-          color: Colors.black,
-          borderRadius: BorderRadius.circular(16),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.2),
-              blurRadius: 10,
-              offset: Offset(0, 4),
-            ),
-          ],
-        ),
-        child: Stack(
-          alignment: Alignment.center,
-          children: [
-            Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.black54, Colors.black26],
+  Widget _buildVideoMessage(String videoUrl, String? fileName, int? fileSize) {
+    String fullVideoUrl = videoUrl;
+    if (!videoUrl.startsWith('http')) {
+      fullVideoUrl = 'http://10.224.30.163:8080$videoUrl';
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        GestureDetector(
+          onTap: () => _showVideoPlayer(fullVideoUrl),
+          child: Container(
+            width: 250,
+            height: 200,
+            decoration: BoxDecoration(
+              color: Colors.black,
+              borderRadius: BorderRadius.circular(16),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(0.2),
+                  blurRadius: 10,
+                  offset: Offset(0, 4),
                 ),
-              ),
+              ],
             ),
-            Container(
-              padding: EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.black38,
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                Icons.play_arrow_rounded,
-                size: 50,
-                color: Colors.white,
-              ),
-            ),
-            Positioned(
-              bottom: 12,
-              left: 12,
-              child: Container(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.black54,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.videocam_rounded, size: 14, color: Colors.white),
-                    SizedBox(width: 6),
-                    Text(
-                      'Video Message',
-                      style: GoogleFonts.poppins(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: Colors.white,
-                      ),
+            child: Stack(
+              alignment: Alignment.center,
+              children: [
+                // Video thumbnail background
+                Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(16),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [Colors.black54, Colors.black26],
                     ),
-                  ],
+                  ),
                 ),
-              ),
+
+                // Play button
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.black38,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    Icons.play_arrow_rounded,
+                    size: 50,
+                    color: Colors.white,
+                  ),
+                ),
+
+                // Video info badge
+                Positioned(
+                  bottom: 12,
+                  left: 12,
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.videocam_rounded, size: 14, color: Colors.white),
+                        SizedBox(width: 6),
+                        Text(
+                          'Video',
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
-      ),
+        if (fileName != null || fileSize != null) ...[
+          SizedBox(height: 4),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (fileName != null)
+                  Text(
+                    fileName,
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      color: Color(0xFF8F9BB3),
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                if (fileSize != null)
+                  Text(
+                    _mediaService.getFileSizeString(fileSize),
+                    style: GoogleFonts.poppins(
+                      fontSize: 9,
+                      color: Color(0xFF8F9BB3).withOpacity(0.7),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ],
     );
   }
 
@@ -942,23 +1186,23 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     }
 
     return Container(
-        padding: EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.05),
-              blurRadius: 10,
-              offset: Offset(0, -2),
-            ),
-          ],
-        ),
-        child: SafeArea(
-            top: false,
-            child: Row(
-              children: [
-              // Attachment Button
-              GestureDetector(
+      padding: EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.05),
+            blurRadius: 10,
+            offset: Offset(0, -2),
+          ),
+        ],
+      ),
+      child: SafeArea(
+        top: false,
+        child: Row(
+          children: [
+            // Attachment Button
+            GestureDetector(
               onTap: _showAttachmentOptions,
               child: Container(
                 width: 40,
@@ -1006,51 +1250,51 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
 
             // Send/Voice Button
             GestureDetector(
-                onTap: _messageController.text.trim().isEmpty
-                    ? _startVoiceRecording
-                    : _sendMessage,
-                child: Container(
-                    width: 48,
-                    height: 48,
-                    decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
-                        ),
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: Color(0xFF2E5BFF).withOpacity(0.3),
-                          blurRadius: 12,
-                          offset: Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                  child: _isSending
-                      ? Padding(
-                    padding: EdgeInsets.all(12),
-                    child: CircularProgressIndicator(
-                      strokeWidth: 2,
-                      valueColor: AlwaysStoppedAnimation(Colors.white),
-                    ),
-                  )
-                      : Icon(
-                    _messageController.text.trim().isEmpty
-                        ? Icons.mic_rounded
-                        : Icons.send_rounded,
-                    color: Colors.white,
-                    size: 20,
+              onTap: _messageController.text.trim().isEmpty
+                  ? _startVoiceRecording
+                  : _sendMessage,
+              child: Container(
+                width: 48,
+                height: 48,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
                   ),
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Color(0xFF2E5BFF).withOpacity(0.3),
+                      blurRadius: 12,
+                      offset: Offset(0, 4),
+                    ),
+                  ],
                 ),
+                child: _isSending
+                    ? Padding(
+                  padding: EdgeInsets.all(12),
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    valueColor: AlwaysStoppedAnimation(Colors.white),
+                  ),
+                )
+                    : Icon(
+                  _messageController.text.trim().isEmpty
+                      ? Icons.mic_rounded
+                      : Icons.send_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
             ),
-              ],
-            ),
+          ],
         ),
+      ),
     );
   }
 
-// ==========================================================================
-// RECORDING INTERFACE
-// ==========================================================================
+  // ==========================================================================
+  // RECORDING INTERFACE
+  // ==========================================================================
 
   Widget _buildRecordingInterface() {
     return Container(
@@ -1071,7 +1315,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         top: false,
         child: Row(
           children: [
-// Recording Animation
+            // Recording Animation
             Container(
               width: 40,
               height: 40,
@@ -1173,12 +1417,11 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         ),
       ),
     );
-
   }
 
-// ==========================================================================
-// ATTACHMENT OPTIONS
-// ==========================================================================
+  // ==========================================================================
+  // ATTACHMENT OPTIONS
+  // ==========================================================================
 
   void _showAttachmentOptions() {
     showModalBottomSheet(
@@ -1194,7 +1437,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-// Handle Bar
+              // Handle Bar
               Container(
                 width: 40,
                 height: 4,
@@ -1255,7 +1498,6 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         ),
       ),
     );
-
   }
 
   Widget _buildAttachmentOption({
@@ -1327,9 +1569,9 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     );
   }
 
-// ==========================================================================
-// FULL SCREEN MEDIA VIEWERS
-// ==========================================================================
+  // ==========================================================================
+  // FULL SCREEN MEDIA VIEWERS
+  // ==========================================================================
 
   void _showFullScreenImage(String imageUrl) {
     Navigator.push(
@@ -1341,37 +1583,78 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
             backgroundColor: Colors.black,
             elevation: 0,
             leading: IconButton(
-              icon: Icon(Icons.close, color: Colors.white),
+              icon: Icon(Icons.arrow_back, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
             actions: [
               IconButton(
                 icon: Icon(Icons.download_rounded, color: Colors.white),
-                onPressed: () {
-                  _showSnackBar('Download feature coming soon!');
+                onPressed: () async {
+                  try {
+                    // TODO: Implement download functionality
+                    _showSnackBar('Download feature coming soon!');
+                  } catch (e) {
+                    _showSnackBar('Download failed: $e', isError: true);
+                  }
+                },
+              ),
+              IconButton(
+                icon: Icon(Icons.share_rounded, color: Colors.white),
+                onPressed: () async {
+                  try {
+                    // TODO: Implement share functionality
+                    _showSnackBar('Share feature coming soon!');
+                  } catch (e) {
+                    _showSnackBar('Share failed: $e', isError: true);
+                  }
                 },
               ),
             ],
           ),
           body: Center(
-            child: Hero(
-              tag: imageUrl,
-              child: InteractiveViewer(
-                minScale: 0.5,
-                maxScale: 4.0,
-                child: Image.network(
-                  imageUrl,
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return Center(
-                      child: CircularProgressIndicator(
-                        value: progress.expectedTotalBytes != null
-                            ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
-                            : null,
-                        valueColor: AlwaysStoppedAnimation(Colors.white),
+            child: PhotoView(
+              imageProvider: NetworkImage(imageUrl),
+              backgroundDecoration: BoxDecoration(
+                color: Colors.black,
+              ),
+              minScale: PhotoViewComputedScale.contained,
+              maxScale: PhotoViewComputedScale.covered * 2.0,
+              initialScale: PhotoViewComputedScale.contained,
+              heroAttributes: PhotoViewHeroAttributes(tag: imageUrl),
+              loadingBuilder: (context, event) => Center(
+                child: Container(
+                  width: 100,
+                  height: 100,
+                  child: CircularProgressIndicator(
+                    value: event == null
+                        ? 0
+                        : event.cumulativeBytesLoaded / event.expectedTotalBytes!,
+                    valueColor: AlwaysStoppedAnimation(Colors.white),
+                  ),
+                ),
+              ),
+              errorBuilder: (context, error, stackTrace) => Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Icon(Icons.error_outline, size: 64, color: Colors.white),
+                    SizedBox(height: 16),
+                    Text(
+                      'Failed to load image',
+                      style: GoogleFonts.poppins(
+                        fontSize: 16,
+                        color: Colors.white,
                       ),
-                    );
-                  },
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Tap to retry',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Colors.white70,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -1382,23 +1665,23 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   }
 
   void _showVideoPlayer(String videoUrl) {
-// TODO: Implement video player
-// You can use video_player package
-    _showSnackBar('Video player feature coming soon!');
+    // Convert to full URL if needed
+    String fullVideoUrl = videoUrl;
+    if (!videoUrl.startsWith('http')) {
+      fullVideoUrl = 'http://10.224.30.163:8080$videoUrl';
+    }
 
-// Example implementation:
-// Navigator.push(
-//   context,
-//   MaterialPageRoute(
-//     builder: (context) => VideoPlayerScreen(videoUrl: videoUrl),
-//   ),
-// );
-
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoPlayerScreen(videoUrl: fullVideoUrl),
+      ),
+    );
   }
 
-// ==========================================================================
-// LOADING & EMPTY STATES
-// ==========================================================================
+  // ==========================================================================
+  // LOADING & EMPTY STATES
+  // ==========================================================================
 
   Widget _buildLoading() {
     return Center(
@@ -1488,9 +1771,9 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     );
   }
 
-// ==========================================================================
-// HELPER METHODS
-// ==========================================================================
+  // ==========================================================================
+  // HELPER METHODS
+  // ==========================================================================
 
   String _formatTime(String dateTimeString) {
     try {
@@ -1516,7 +1799,19 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     } catch (e) {
       return dateTimeString;
     }
+  }
 
+  String _formatDuration(Duration duration) {
+    String twoDigits(int n) => n.toString().padLeft(2, "0");
+    final hours = duration.inHours;
+    final minutes = duration.inMinutes.remainder(60);
+    final seconds = duration.inSeconds.remainder(60);
+
+    if (hours > 0) {
+      return "${twoDigits(hours)}:${twoDigits(minutes)}:${twoDigits(seconds)}";
+    } else {
+      return "${twoDigits(minutes)}:${twoDigits(seconds)}";
+    }
   }
 
   void _showSnackBar(String message, {bool isError = false}) {
@@ -1540,7 +1835,6 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         duration: Duration(seconds: 3),
       ),
     );
-
   }
 
   void _showPermissionDeniedDialog(String permission) {
@@ -1589,6 +1883,3 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     );
   }
 }
-
-
-

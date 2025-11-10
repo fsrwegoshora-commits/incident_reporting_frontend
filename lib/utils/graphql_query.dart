@@ -698,7 +698,7 @@ const String createIncidentMutation = '''
         longitude
         status
         reportedAt
-        liveCallRequested
+        isLiveCallRequested
          assignedOfficer {
           uid
           badgeNumber
@@ -933,7 +933,7 @@ const String getIncidentStatsQuery = '''
   }
 ''';
 
-// ============================================================================
+/// ============================================================================
 // CHAT MESSAGE MUTATIONS
 // ============================================================================
 
@@ -947,9 +947,15 @@ const String sendChatMessageMutation = '''
         message
         messageType
         sentAt
+        mediaUrl
+        mediaFileName
+        mediaFileSize
+        mediaDuration
+        mediaThumbnailUrl
         sender {
           uid
           name
+          phoneNumber
         }
       }
     }
@@ -975,6 +981,16 @@ const String sendSystemMessageMutation = '''
         message
         messageType
         sentAt
+        mediaUrl
+        mediaFileName
+        mediaFileSize
+        mediaDuration
+        mediaThumbnailUrl
+        sender {
+          uid
+          name
+          phoneNumber
+        }
       }
     }
   }
@@ -991,6 +1007,27 @@ const String markMessagesAsReadMutation = '''
 ''';
 
 // ============================================================================
+// MEDIA UPLOAD MUTATION
+// ============================================================================
+
+const String uploadMediaMutation = '''
+  mutation UploadMedia(\$base64File: String!, \$fileName: String!, \$mediaType: String!) {
+    uploadMedia(base64File: \$base64File, fileName: \$fileName, mediaType: \$mediaType) {
+      status
+      message
+      data {
+        fileUrl
+        fileName
+        originalFileName
+        fileSize
+        mediaType
+      }
+    }
+  }
+''';
+
+
+// ============================================================================
 // CHAT MESSAGE QUERIES
 // ============================================================================
 
@@ -1004,6 +1041,11 @@ const String getChatMessageQuery = '''
         message
         messageType
         sentAt
+        mediaUrl
+        mediaFileName
+        mediaFileSize
+        mediaDuration
+        mediaThumbnailUrl
         sender {
           uid
           name
@@ -1025,6 +1067,11 @@ const String getIncidentMessagesQuery = '''
           message
           messageType
           sentAt
+          mediaUrl
+          mediaFileName
+          mediaFileSize
+          mediaDuration
+          mediaThumbnailUrl
           sender {
             uid
             name
@@ -1049,6 +1096,11 @@ const String getAllIncidentMessagesQuery = '''
         message
         messageType
         sentAt
+        mediaUrl
+        mediaFileName
+        mediaFileSize
+        mediaDuration
+        mediaThumbnailUrl
         sender {
           uid
           name
@@ -1068,7 +1120,6 @@ const String getUnreadMessageCountQuery = '''
     }
   }
 ''';
-
 // ============================================================================
 // OFFICER SHIFT QUERIES
 // ============================================================================

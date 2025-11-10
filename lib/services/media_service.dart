@@ -1,79 +1,121 @@
 import 'dart:io';
-import 'package:dio/dio.dart';
 import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'graphql_service.dart';
 
 class MediaService {
-  static final MediaService _instance = MediaService._internal();
-  factory MediaService() => _instance;
-  MediaService._internal();
+  final GraphQLService graphQLService;
 
-  final Dio _dio = Dio();
-  static const String _baseUrl = 'http://your-backend-url'; // ⚠️ Change this!
+  MediaService(this.graphQLService);
 
-  /// Upload file to server
-  Future<String?> uploadFile(File file, String fileType) async {
+  /// 📤 Upload file to server using GraphQL (Base64-based)
+  Future<Map<String, dynamic>?> uploadFileWithDetails(File file, String mediaType) async {
     try {
-      // Get JWT token
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('jwt_token');
+      print('📤 Starting upload for: ${file.path}');
+      print('📁 File size: ${file.lengthSync()} bytes');
+      print('🎯 Media type: $mediaType');
 
-      if (token == null) {
-        print('❌ No auth token found');
+      // ✅ Validate file existence
+      if (!await file.exists()) {
+        print('❌ File does not exist: ${file.path}');
         return null;
       }
 
-      // Prepare form data
-      String fileName = file.path.split('/').last;
-      FormData formData = FormData.fromMap({
-        'file': await MultipartFile.fromFile(
-          file.path,
-          filename: fileName,
-        ),
-        'type': fileType, // 'audio', 'video', 'image'
-      });
+      // 👉 Send mutation
+      final response = await graphQLService.uploadFileWithGraphQL(file, mediaType);
 
-      // Upload
-      final response = await _dio.post(
-        '$_baseUrl/api/upload',
-        data: formData,
-        options: Options(
-          headers: {
-            'Authorization': 'Bearer $token',
-            'Content-Type': 'multipart/form-data',
-          },
-        ),
-        onSendProgress: (sent, total) {
-          print('📤 Upload progress: ${(sent / total * 100).toStringAsFixed(0)}%');
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final fileUrl = response.data['url'];
-        print('✅ File uploaded: $fileUrl');
-        return fileUrl;
+      // 🔎 Error checking
+      if (response.containsKey('errors')) {
+        print('❌ GraphQL upload error: ${response['errors']}');
+        return null;
       }
 
-      return null;
-    } catch (e) {
-      print('❌ Upload failed: $e');
+      final uploadMedia = response['data']?['uploadMedia'];
+      if (uploadMedia == null) {
+        print('❌ Invalid response structure');
+        return null;
+      }
+
+      print('📥 Server response: $uploadMedia');
+
+      final status = (uploadMedia['status'] ?? '').toString().toLowerCase();
+
+      if (status == 'success') {
+        final mediaData = uploadMedia['data'];
+        print('✅ File uploaded successfully: ${mediaData?['fileUrl']}');
+        return mediaData;
+      } else {
+        print('❌ Upload failed: ${uploadMedia['message']}');
+        return null;
+      }
+
+
+    } catch (e, stackTrace) {
+      print('❌ Upload exception: $e');
+      print('📋 Stack trace: $stackTrace');
       return null;
     }
   }
 
-  /// Download and save file locally
+  /// 🔁 Simplified upload - returns only the file URL
+  Future<String?> uploadFile(File file, String mediaType) async {
+    final details = await uploadFileWithDetails(file, mediaType);
+    return details?['fileUrl'];
+  }
+
+  /// 📥 "Download" file (placeholder - returns URL)
   Future<String?> downloadFile(String url, String fileName) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
       final filePath = '${dir.path}/$fileName';
-
-      await _dio.download(url, filePath);
-      print('✅ File downloaded: $filePath');
-
-      return filePath;
+      print('✅ File would be stored at: $filePath');
+      return url; // we just return URL for now
     } catch (e) {
       print('❌ Download failed: $e');
       return null;
     }
+  }
+
+  /// 📊 Format file size
+  String getFileSizeString(int bytes) {
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1048576) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / 1048576).toStringAsFixed(1)} MB';
+  }
+
+  /// 🧩 Get file extension
+  String getFileExtension(String fileName) {
+    if (fileName.contains('.')) {
+      return fileName.substring(fileName.lastIndexOf('.')).toLowerCase();
+    }
+    return '';
+  }
+
+  /// 🖼️ Check if image
+  bool isImageFile(String fileName) {
+    final ext = getFileExtension(fileName);
+    return ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp'].contains(ext);
+  }
+
+  /// 🎥 Check if video
+  bool isVideoFile(String fileName) {
+    final ext = getFileExtension(fileName);
+    return ['.mp4', '.avi', '.mov', '.wmv', '.flv', '.webm'].contains(ext);
+  }
+
+  /// 🎵 Check if audio
+  bool isAudioFile(String fileName) {
+    final ext = getFileExtension(fileName);
+    return ['.mp3', '.wav', '.aac', '.ogg', '.m4a'].contains(ext);
+  }
+
+  /// 🔎 Detect media type from file
+  String getMediaTypeFromFile(File file) {
+    final fileName = file.path.split('/').last;
+
+    if (isImageFile(fileName)) return 'IMAGE';
+    if (isVideoFile(fileName)) return 'VIDEO';
+    if (isAudioFile(fileName)) return 'AUDIO';
+
+    return 'FILE';
   }
 }

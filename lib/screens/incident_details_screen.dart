@@ -266,7 +266,7 @@ class _IncidentDetailsScreenState extends State<IncidentDetailsScreen> {
   Widget _buildDetailsSection() {
     final description = _incident!['description'] ?? 'No description';
     final status = _incident!['status'] ?? 'PENDING';
-    final isLiveCall = _incident!['isLiveCallRequested'] ?? false;
+    final isLiveCall = _incident!['is '] ?? false;
 
     final statusInfo = _getStatusInfo(status);
 
