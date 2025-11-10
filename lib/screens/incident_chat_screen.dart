@@ -3,12 +3,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:incident_reporting_frontend/screens/video_player_screen.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_view/photo_view.dart';
 import 'dart:io';
 import 'dart:async';
 
 import '../services/graphql_service.dart';
+import '../services/media_download_service.dart';
 import '../services/media_service.dart';
 import '../services/voice_recorder_service.dart';
 import '../utils/graphql_query.dart';
@@ -18,6 +20,7 @@ class IncidentChatScreen extends StatefulWidget {
   final String incidentUid;
   final String incidentTitle;
   final String currentUserUid;
+
 
   const IncidentChatScreen({
     Key? key,
@@ -40,6 +43,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   late GraphQLService _gqlService;
   late MediaService _mediaService;
   late VoiceRecorderService _voiceRecorder;
+  late MediaDownloadService _mediaDownloadService;
 
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
@@ -48,6 +52,10 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   int _recordDuration = 0;
   double _uploadProgress = 0.0;
   bool _showProgressDialog = false;
+
+  String? _lastMessageId;
+  DateTime? _lastMessageTime;
+  int _previousMessageCount = 0;
 
   Timer? _refreshTimer;
   Timer? _recordingTimer;
@@ -80,6 +88,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     _gqlService = GraphQLService();
     _mediaService = MediaService(_gqlService);
     _voiceRecorder = VoiceRecorderService();
+    _mediaDownloadService = MediaDownloadService(_gqlService);
   }
 
   // ==========================================================================
@@ -105,22 +114,28 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
       }
 
       final result = response['data']?['getAllIncidentMessages'];
-      if (result['status'] == 'Success') {
-        final messages = result['data'] as List<dynamic>? ?? [];
-
-        setState(() {
-          _messages = messages.cast<Map<String, dynamic>>();
-        });
-
-        // Scroll to bottom
-        if (_messages.isNotEmpty) {
-          _scrollToBottom();
-        }
-      } else {
+      if (result['status'] != 'Success') {
         if (!silent) {
           _showSnackBar(result['message'] ?? 'Failed to load messages', isError: true);
         }
+        return;
       }
+
+      final messages = (result['data'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+
+      // TUMIA HAPA: Angalia kama kuna mabadiliko
+      final hasNewMessages = _hasNewMessages(messages);
+
+      setState(() {
+        _messages = messages;
+        _updateLastMessageInfo(messages);
+      });
+
+      // Refresh UI TU kama kuna mabadiliko
+      if (hasNewMessages && messages.isNotEmpty) {
+        _scrollToBottom();
+      }
+
     } catch (e) {
       if (!silent) {
         _showSnackBar('Error: ${e.toString()}', isError: true);
@@ -130,6 +145,38 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         setState(() => _isLoading = false);
       }
     }
+  }
+
+  void _updateLastMessageInfo(List<Map<String, dynamic>> messages) {
+    if (messages.isEmpty) return;
+
+    final lastMsg = messages.last;
+    _lastMessageId = lastMsg['uid']?.toString();
+    _lastMessageTime = DateTime.tryParse(lastMsg['sentAt'] ?? '');
+    _previousMessageCount = messages.length;
+  }
+
+  bool _hasNewMessages(List<Map<String, dynamic>> newMessages) {
+    if (newMessages.isEmpty) return false;
+    if (_messages.isEmpty) return true;
+
+    final newLastId = newMessages.last['uid']?.toString();
+    if (newLastId != null && newLastId != _lastMessageId) {
+      return true;
+    }
+
+    if (newMessages.length != _previousMessageCount) {
+      return true;
+    }
+
+    final newLastTime = DateTime.tryParse(newMessages.last['sentAt'] ?? '');
+    if (newLastTime != null && _lastMessageTime != null) {
+      if (newLastTime.isAfter(_lastMessageTime!)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   void _scrollToBottom() {
@@ -597,14 +644,316 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         return;
       }
 
-      await _audioPlayer.play(UrlSource(audioUrl));
+      // Stop any currently playing audio
+      if (_playingAudioUrl != null) {
+        await _audioPlayer.stop();
+      }
+
+      // Check if audio is downloaded locally
+      final localPath = await _getLocalMediaPath(audioUrl);
+      if (localPath == null) {
+        _showSnackBar('Download audio to play', isError: true);
+        return;
+      }
+      await _audioPlayer.play(DeviceFileSource(localPath));
+
       setState(() => _playingAudioUrl = audioUrl);
 
       _audioPlayer.onPlayerComplete.listen((_) {
         setState(() => _playingAudioUrl = null);
       });
+
     } catch (e) {
-      _showSnackBar('Failed to play audio', isError: true);
+      print('❌ Audio playback error: $e');
+      _showSnackBar('Failed to play audio: ${e.toString()}', isError: true);
+    }
+  }
+
+
+
+  // ==========================================================================
+// MEDIA DOWNLOAD METHODS
+// ==========================================================================
+
+
+  Future<void> _downloadMedia(String mediaUrl, String mediaType, String? fileName) async {
+    try {
+      _showSnackBar('Downloading ${mediaType.toLowerCase()}...');
+
+      final result = await _mediaDownloadService.downloadMedia(mediaUrl);
+
+      if (result != null) {
+        _showSnackBar('${mediaType.toLowerCase()} downloaded successfully!');
+        setState(() {});
+
+        // ✅ VERIFY THE DOWNLOAD
+        await _mediaDownloadService.verifyDownloadedFiles();
+      }
+    } catch (e) {
+      _showSnackBar('Download failed: ${e.toString()}', isError: true);
+    }
+  }
+
+  Future<bool> _isMediaDownloaded(String mediaUrl) async {
+    return await _mediaDownloadService.isMediaDownloaded(mediaUrl);
+  }
+
+  Future<String?> _getLocalMediaPath(String mediaUrl) async {
+    return await _mediaDownloadService.getLocalMediaPath(mediaUrl);
+  }
+
+  void _showDownloadOptions(String mediaUrl, String mediaType, String? fileName) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (context) => Container(
+        padding: EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        child: SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Handle Bar
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Color(0xFFE4E9F2),
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              SizedBox(height: 20),
+
+              Text(
+                'Media Options',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+              SizedBox(height: 20),
+
+              // Download Option
+              _buildDownloadOption(
+                icon: Icons.download_rounded,
+                label: 'Download',
+                subtitle: 'Save to device',
+                color: Color(0xFF2E5BFF),
+                onTap: () {
+                  Navigator.pop(context);
+                  _downloadMedia(mediaUrl, mediaType, fileName);
+                },
+              ),
+
+              // View Local Option (if downloaded)
+              FutureBuilder<bool>(
+                future: _isMediaDownloaded(mediaUrl),
+                builder: (context, snapshot) {
+                  final isDownloaded = snapshot.data ?? false;
+                  if (!isDownloaded) return SizedBox();
+
+                  return _buildDownloadOption(
+                    icon: Icons.folder_rounded,
+                    label: 'View Local',
+                    subtitle: 'Open downloaded file',
+                    color: Color(0xFF4ECDC4),
+                    onTap: () async {
+                      Navigator.pop(context);
+                      final localPath = await _getLocalMediaPath(mediaUrl);
+                      if (localPath != null) {
+                        _openLocalMedia(localPath, mediaType);
+                      }
+                    },
+                  );
+                },
+              ),
+
+              // Delete Download Option (if downloaded)
+              FutureBuilder<bool>(
+                future: _isMediaDownloaded(mediaUrl),
+                builder: (context, snapshot) {
+                  final isDownloaded = snapshot.data ?? false;
+                  if (!isDownloaded) return SizedBox();
+
+                  return _buildDownloadOption(
+                    icon: Icons.delete_rounded,
+                    label: 'Delete Local',
+                    subtitle: 'Remove from device',
+                    color: AppTheme.errorRed,
+                    onTap: () {
+                      Navigator.pop(context);
+                      _deleteDownloadedMedia(mediaUrl);
+                    },
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDownloadOption({
+    required IconData icon,
+    required String label,
+    required String subtitle,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      borderRadius: BorderRadius.circular(12),
+      child: Container(
+        padding: EdgeInsets.all(16),
+        margin: EdgeInsets.only(bottom: 12),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: color,
+                borderRadius: BorderRadius.circular(12),
+                boxShadow: [
+                  BoxShadow(
+                    color: color.withOpacity(0.3),
+                    blurRadius: 8,
+                    offset: Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Icon(icon, color: Colors.white, size: 24),
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: GoogleFonts.poppins(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1F36),
+                    ),
+                  ),
+                  Text(
+                    subtitle,
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Color(0xFF8F9BB3),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            Icon(
+              Icons.arrow_forward_ios_rounded,
+              size: 16,
+              color: color,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _deleteDownloadedMedia(String mediaUrl) async {
+    try {
+      final success = await _mediaDownloadService.deleteDownloadedMedia(mediaUrl);
+      if (success) {
+        _showSnackBar('Media deleted from device');
+        setState(() {}); // Refresh UI
+      } else {
+        _showSnackBar('Failed to delete media', isError: true);
+      }
+    } catch (e) {
+      _showSnackBar('Delete error: ${e.toString()}', isError: true);
+    }
+  }
+
+  void _openLocalMedia(String localPath, String mediaType) {
+    if (mediaType == 'IMAGE') {
+      _showLocalImage(localPath);
+    } else if (mediaType == 'VIDEO') {
+      _showLocalVideo(localPath);
+    } else if (mediaType == 'AUDIO') {
+      _playLocalAudio(localPath);
+    }
+  }
+
+  void _showLocalImage(String localPath) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(
+              'Local Image',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontSize: 16,
+              ),
+            ),
+          ),
+          body: Center(
+            child: PhotoView(
+              imageProvider: FileImage(File(localPath)),
+              backgroundDecoration: BoxDecoration(color: Colors.black),
+              minScale: PhotoViewComputedScale.contained,
+              maxScale: PhotoViewComputedScale.covered * 2.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showLocalVideo(String localPath) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoPlayerScreen(videoUrl: localPath),
+      ),
+    );
+  }
+
+  void _playLocalAudio(String localPath) async {
+    try {
+      if (_playingAudioUrl == localPath) {
+        await _audioPlayer.stop();
+        setState(() => _playingAudioUrl = null);
+        return;
+      }
+
+      if (_playingAudioUrl != null) {
+        await _audioPlayer.stop();
+      }
+
+      await _audioPlayer.play(DeviceFileSource(localPath));
+      setState(() => _playingAudioUrl = localPath);
+
+      _audioPlayer.onPlayerComplete.listen((_) {
+        setState(() => _playingAudioUrl = null);
+      });
+    } catch (e) {
+      _showSnackBar('Failed to play: $e', isError: true);
     }
   }
 
@@ -848,303 +1197,382 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   }
 
   Widget _buildImageMessage(String imageUrl, String? fileName, int? fileSize) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: () => _showFullScreenImage(imageUrl),
-          child: Hero(
-            tag: imageUrl,
-            child: Container(
-              constraints: BoxConstraints(maxWidth: 250, maxHeight: 300),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    blurRadius: 10,
-                    offset: Offset(0, 4),
-                  ),
-                ],
-              ),
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(16),
-                child: Image.network(
-                  imageUrl,
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, progress) {
-                    if (progress == null) return child;
-                    return Container(
-                      width: 250,
-                      height: 200,
-                      color: Colors.grey[200],
-                      child: Center(
-                        child: CircularProgressIndicator(
-                          value: progress.expectedTotalBytes != null
-                              ? progress.cumulativeBytesLoaded / progress.expectedTotalBytes!
-                              : null,
+    return FutureBuilder<String?>(
+      future: _getLocalMediaPath(imageUrl),
+      builder: (context, snapshot) {
+        final localPath = snapshot.data;
+        final isDownloaded = localPath != null;
+        final isSender = _isMessageFromCurrentUser(imageUrl); // NEW: Check if sender
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // IMAGE CONTAINER
+            GestureDetector(
+              onTap: (isDownloaded || isSender) // CHANGED: Sender can always view
+                  ? () => isSender
+                  ? _showNetworkImagePreview(imageUrl, fileName) // Sender views directly
+                  : _showLocalImage(localPath!) // Receiver views downloaded
+                  : null,
+              child: Container(
+                width: 280,
+                height: 200,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                ),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: (isDownloaded || isSender) // CHANGED: Show image if downloaded OR sender
+                      ? isSender
+                      ? Image.network( // Sender sees network image
+                    imageUrl,
+                    fit: BoxFit.cover,
+                    width: 280,
+                    height: 200,
+                    loadingBuilder: (context, child, progress) {
+                      if (progress == null) return child;
+                      return Container(
+                        color: Colors.grey[200],
+                        child: Center(
+                          child: CircularProgressIndicator(),
                         ),
-                      ),
-                    );
-                  },
-                  errorBuilder: (context, error, stackTrace) {
-                    return Container(
-                      width: 250,
-                      height: 200,
-                      color: Colors.grey[200],
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.broken_image, size: 50, color: Colors.grey),
-                          SizedBox(height: 8),
-                          Text('Failed to load image'),
-                        ],
-                      ),
-                    );
-                  },
+                      );
+                    },
+                    errorBuilder: (context, error, stackTrace) {
+                      return _buildMediaPlaceholder('IMAGE', 'Failed to load');
+                    },
+                  )
+                      : Image.file( // Receiver sees local file
+                    File(localPath!),
+                    fit: BoxFit.cover,
+                    width: 280,
+                    height: 200,
+                  )
+                      : _buildMediaPlaceholder('IMAGE', 'Tap to download'),
                 ),
               ),
             ),
-          ),
-        ),
-        if (fileName != null || fileSize != null) ...[
-          SizedBox(height: 4),
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (fileName != null)
-                  Text(
-                    fileName,
-                    style: GoogleFonts.poppins(
-                      fontSize: 10,
-                      color: Color(0xFF8F9BB3),
+
+            // File info + Download button
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // File name & size
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (fileName != null)
+                          Text(
+                            fileName,
+                            style: GoogleFonts.poppins(fontSize: 12, color: Color(0xFF8F9BB3)),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        if (fileSize != null)
+                          Text(
+                            _mediaService.getFileSizeString(fileSize),
+                            style: GoogleFonts.poppins(fontSize: 11, color: Color(0xFF8F9BB3).withOpacity(0.7)),
+                          ),
+                      ],
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
                   ),
-                if (fileSize != null)
-                  Text(
-                    _mediaService.getFileSizeString(fileSize),
-                    style: GoogleFonts.poppins(
-                      fontSize: 9,
-                      color: Color(0xFF8F9BB3).withOpacity(0.7),
+
+                  // Download / Status button - HIDE for sender
+                  if (!isSender) // CHANGED: Only show download button for receiver
+                    GestureDetector(
+                      onTap: () => isDownloaded
+                          ? _showDownloadOptions(imageUrl, 'IMAGE', fileName)
+                          : _downloadMedia(imageUrl, 'IMAGE', fileName),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isDownloaded ? Colors.green.withOpacity(0.15) : Color(0xFF2E5BFF).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              isDownloaded ? Icons.check : Icons.download_rounded,
+                              size: 16,
+                              color: isDownloaded ? Colors.green : Color(0xFF2E5BFF),
+                            ),
+                            SizedBox(width: 4),
+                            Text(
+                              isDownloaded ? 'Saved' : 'Download',
+                              style: GoogleFonts.poppins(
+                                fontSize: 12,
+                                color: isDownloaded ? Colors.green : Color(0xFF2E5BFF),
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
                     ),
-                  ),
-              ],
+
+                  // For sender, show "You sent" indicator
+                  if (isSender)
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF2E5BFF).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check, size: 16, color: Color(0xFF2E5BFF)),
+                          SizedBox(width: 4),
+                          Text(
+                            'You sent',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Color(0xFF2E5BFF),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
-          ),
-        ],
-      ],
+          ],
+        );
+      },
     );
   }
 
   Widget _buildAudioMessage(String audioUrl, bool isMyMessage, int? duration, int? fileSize, String fileName) {
-    final isPlaying = _playingAudioUrl == audioUrl;
-    final durationText = duration != null ? _formatDuration(Duration(seconds: duration)) : 'Unknown duration';
-    final fileSizeText = fileSize != null ? _mediaService.getFileSizeString(fileSize) : '';
+    return FutureBuilder<String?>(
+      future: _getLocalMediaPath(audioUrl),
+      builder: (context, snapshot) {
+        final localPath = snapshot.data;
+        final isDownloaded = localPath != null;
+        final isPlaying = _playingAudioUrl == audioUrl;
+        final isSender = _isMessageFromCurrentUser(audioUrl); // NEW
+        final durationText = duration != null ? _formatDuration(Duration(seconds: duration)) : 'Unknown';
 
-    return Container(
-      constraints: BoxConstraints(maxWidth: 280),
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: isMyMessage ? Color(0xFF2E5BFF) : Colors.white,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.1),
-            blurRadius: 8,
-            offset: Offset(0, 2),
+        return Container(
+          constraints: BoxConstraints(maxWidth: 280),
+          padding: EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isMyMessage ? Color(0xFF2E5BFF) : Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 8, offset: Offset(0, 2))],
           ),
-        ],
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          // Play/Pause Button
-          GestureDetector(
-            onTap: () => _playAudio(audioUrl),
-            child: Container(
-              padding: EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: isMyMessage
-                    ? Colors.white.withOpacity(0.2)
-                    : Color(0xFF2E5BFF).withOpacity(0.1),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(
-                isPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded,
-                color: isMyMessage ? Colors.white : Color(0xFF2E5BFF),
-                size: 20,
-              ),
-            ),
-          ),
-          SizedBox(width: 12),
-
-          // Audio Info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  fileName,
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: isMyMessage ? Colors.white : Color(0xFF1A1F36),
+          child: Row(
+            children: [
+              // Play button (enabled if downloaded OR sender)
+              GestureDetector(
+                onTap: (isDownloaded || isSender) // CHANGED
+                    ? () => isSender
+                    ? _playNetworkAudio(audioUrl) // Sender plays directly
+                    : _playLocalAudio(localPath!) // Receiver plays downloaded
+                    : null,
+                child: Container(
+                  padding: EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: isMyMessage ? Colors.white.withOpacity(0.2) : Color(0xFF2E5BFF).withOpacity(0.1),
+                    shape: BoxShape.circle,
                   ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                SizedBox(height: 2),
-                Text(
-                  durationText,
-                  style: GoogleFonts.poppins(
-                    fontSize: 10,
-                    color: isMyMessage ? Colors.white.withOpacity(0.8) : Color(0xFF8F9BB3),
+                  child: Icon(
+                    (isDownloaded || isSender) // CHANGED
+                        ? (isPlaying ? Icons.stop_rounded : Icons.play_arrow_rounded)
+                        : Icons.download_rounded,
+                    color: isMyMessage ? Colors.white : Color(0xFF2E5BFF),
+                    size: 20,
                   ),
                 ),
-                if (fileSizeText.isNotEmpty) ...[
-                  SizedBox(height: 2),
-                  Text(
-                    fileSizeText,
-                    style: GoogleFonts.poppins(
-                      fontSize: 9,
-                      color: isMyMessage ? Colors.white.withOpacity(0.6) : Color(0xFF8F9BB3).withOpacity(0.8),
+              ),
+              SizedBox(width: 12),
+
+              // Info
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(fileName, style: GoogleFonts.poppins(fontSize: 12, fontWeight: FontWeight.w600, color: isMyMessage ? Colors.white : Color(0xFF1A1F36)), maxLines: 1, overflow: TextOverflow.ellipsis),
+                    SizedBox(height: 2),
+                    Text(
+                      isSender ? durationText : (isDownloaded ? durationText : 'Download to play'), // CHANGED
+                      style: GoogleFonts.poppins(fontSize: 10, color: isMyMessage ? Colors.white.withOpacity(0.8) : Color(0xFF8F9BB3)),
                     ),
-                  ),
-                ],
-                SizedBox(height: 2),
-                Text(
-                  isPlaying ? 'Playing...' : 'Tap to play',
-                  style: GoogleFonts.poppins(
-                    fontSize: 9,
-                    color: isMyMessage ? Colors.white.withOpacity(0.7) : Color(0xFF8F9BB3),
+                    if (fileSize != null && (isDownloaded || isSender)) // CHANGED
+                      Text(_mediaService.getFileSizeString(fileSize), style: GoogleFonts.poppins(fontSize: 9, color: isMyMessage ? Colors.white.withOpacity(0.6) : Color(0xFF8F9BB3).withOpacity(0.8))),
+                  ],
+                ),
+              ),
+
+              // Download button (only for receiver)
+              if (!isDownloaded && !isSender) // CHANGED
+                GestureDetector(
+                  onTap: () => _downloadMedia(audioUrl, 'AUDIO', fileName),
+                  child: Container(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Color(0xFF2E5BFF).withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text('Download', style: GoogleFonts.poppins(fontSize: 11, color: Color(0xFF2E5BFF), fontWeight: FontWeight.w600)),
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
-        ],
-      ),
+        );
+      },
     );
   }
 
   Widget _buildVideoMessage(String videoUrl, String? fileName, int? fileSize) {
-    String fullVideoUrl = videoUrl;
-    if (!videoUrl.startsWith('http')) {
-      fullVideoUrl = 'http://10.224.30.163:8080$videoUrl';
-    }
+    return FutureBuilder<String?>(
+      future: _getLocalMediaPath(videoUrl),
+      builder: (context, snapshot) {
+        final localPath = snapshot.data;
+        final isDownloaded = localPath != null;
+        final isSender = _isMessageFromCurrentUser(videoUrl); // NEW
 
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        GestureDetector(
-          onTap: () => _showVideoPlayer(fullVideoUrl),
-          child: Container(
-            width: 250,
-            height: 200,
-            decoration: BoxDecoration(
-              color: Colors.black,
-              borderRadius: BorderRadius.circular(16),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.2),
-                  blurRadius: 10,
-                  offset: Offset(0, 4),
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            GestureDetector(
+              onTap: (isDownloaded || isSender) // CHANGED
+                  ? () => isSender
+                  ? _showNetworkVideoPreview(videoUrl, fileName) // Sender plays directly
+                  : _showLocalVideo(localPath!) // Receiver plays downloaded
+                  : null,
+              child: Container(
+                width: 280,
+                height: 200,
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.grey.withOpacity(0.3)),
                 ),
-              ],
-            ),
-            child: Stack(
-              alignment: Alignment.center,
-              children: [
-                // Video thumbnail background
-                Container(
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(16),
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [Colors.black54, Colors.black26],
-                    ),
-                  ),
-                ),
-
-                // Play button
-                Container(
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.black38,
-                    shape: BoxShape.circle,
-                  ),
-                  child: Icon(
-                    Icons.play_arrow_rounded,
-                    size: 50,
-                    color: Colors.white,
-                  ),
-                ),
-
-                // Video info badge
-                Positioned(
-                  bottom: 12,
-                  left: 12,
-                  child: Container(
-                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: Colors.black54,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.videocam_rounded, size: 14, color: Colors.white),
-                        SizedBox(width: 6),
-                        Text(
-                          'Video',
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                            color: Colors.white,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: (isDownloaded || isSender) // CHANGED
+                      ? Stack(
+                    children: [
+                      // Video thumbnail
+                      Container(
+                        color: Colors.black,
+                        child: Center(
+                          child: Icon(Icons.play_circle_fill, size: 70, color: Colors.white),
+                        ),
+                      ),
+                      // Play button overlay
+                      Container(
+                        color: Colors.black.withOpacity(0.3),
+                        child: Center(
+                          child: Icon(Icons.play_arrow_rounded, size: 50, color: Colors.white),
+                        ),
+                      ),
+                    ],
+                  )
+                      : Stack(
+                    children: [
+                      Container(
+                        color: Colors.grey[200],
+                        child: Center(
+                          child: Icon(Icons.videocam_off, size: 60, color: Colors.grey[400]),
+                        ),
+                      ),
+                      Container(
+                        color: Colors.black.withOpacity(0.6),
+                        child: Center(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.download_rounded, color: Colors.white, size: 40),
+                              SizedBox(height: 8),
+                              Text(
+                                'Download to play',
+                                style: TextStyle(color: Colors.white, fontSize: 12),
+                              ),
+                            ],
                           ),
                         ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+            // File info + button
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (fileName != null)
+                          Text(fileName, style: GoogleFonts.poppins(fontSize: 12, color: Color(0xFF8F9BB3)), maxLines: 1, overflow: TextOverflow.ellipsis),
+                        if (fileSize != null)
+                          Text(_mediaService.getFileSizeString(fileSize), style: GoogleFonts.poppins(fontSize: 11, color: Color(0xFF8F9BB3).withOpacity(0.7))),
                       ],
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-        ),
-        if (fileName != null || fileSize != null) ...[
-          SizedBox(height: 4),
-          Container(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                if (fileName != null)
-                  Text(
-                    fileName,
-                    style: GoogleFonts.poppins(
-                      fontSize: 10,
-                      color: Color(0xFF8F9BB3),
+
+                  // Only show download button for receiver
+                  if (!isSender) // CHANGED
+                    GestureDetector(
+                      onTap: () => isDownloaded
+                          ? _showDownloadOptions(videoUrl, 'VIDEO', fileName)
+                          : _downloadMedia(videoUrl, 'VIDEO', fileName),
+                      child: Container(
+                        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: isDownloaded
+                              ? Colors.green.withOpacity(0.15)
+                              : Color(0xFF2E5BFF).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(isDownloaded ? Icons.check : Icons.download_rounded, size: 16, color: isDownloaded ? Colors.green : Color(0xFF2E5BFF)),
+                            SizedBox(width: 4),
+                            Text(isDownloaded ? 'Saved' : 'Download', style: GoogleFonts.poppins(fontSize: 12, color: isDownloaded ? Colors.green : Color(0xFF2E5BFF), fontWeight: FontWeight.w600)),
+                          ],
+                        ),
+                      ),
                     ),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                if (fileSize != null)
-                  Text(
-                    _mediaService.getFileSizeString(fileSize),
-                    style: GoogleFonts.poppins(
-                      fontSize: 9,
-                      color: Color(0xFF8F9BB3).withOpacity(0.7),
+
+                  // For sender
+                  if (isSender)
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Color(0xFF2E5BFF).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(20),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.check, size: 16, color: Color(0xFF2E5BFF)),
+                          SizedBox(width: 4),
+                          Text(
+                            'You sent',
+                            style: GoogleFonts.poppins(
+                              fontSize: 12,
+                              color: Color(0xFF2E5BFF),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
                     ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ],
-      ],
+          ],
+        );
+      },
     );
   }
 
@@ -1170,6 +1598,72 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
                 height: 1.3,
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+// ==========================================================================
+// MEDIA PLACEHOLDER METHOD
+// ==========================================================================
+
+  Widget _buildMediaPlaceholder(String mediaType, String message) {
+    IconData icon;
+    Color color;
+
+    switch (mediaType) {
+      case 'IMAGE':
+        icon = Icons.photo_rounded;
+        color = Color(0xFF4ECDC4);
+        break;
+      case 'VIDEO':
+        icon = Icons.videocam_rounded;
+        color = Color(0xFFFFB75E);
+        break;
+      case 'AUDIO':
+        icon = Icons.audiotrack_rounded;
+        color = Color(0xFF2E5BFF);
+        break;
+      default:
+        icon = Icons.insert_drive_file_rounded;
+        color = Color(0xFF8F9BB3);
+    }
+
+    return Container(
+      width: 280,
+      height: 200,
+      decoration: BoxDecoration(
+        color: Colors.grey[100],
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.grey.withOpacity(0.3),
+          width: 0.5,
+        ),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Container(
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(
+              icon,
+              size: 32,
+              color: color,
+            ),
+          ),
+          SizedBox(height: 12),
+          Text(
+            message,
+            style: GoogleFonts.poppins(
+              fontSize: 12,
+              color: Color(0xFF8F9BB3),
+              fontWeight: FontWeight.w500,
+            ),
+            textAlign: TextAlign.center,
           ),
         ],
       ),
@@ -1420,6 +1914,77 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   }
 
   // ==========================================================================
+// NETWORK MEDIA PREVIEW FOR SENDER
+// ==========================================================================
+
+  void _showNetworkImagePreview(String imageUrl, String? fileName) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            elevation: 0,
+            leading: IconButton(
+              icon: Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text(
+              fileName ?? 'Image Preview',
+              style: GoogleFonts.poppins(color: Colors.white, fontSize: 16),
+            ),
+          ),
+          body: Center(
+            child: PhotoView(
+              imageProvider: NetworkImage(imageUrl),
+              backgroundDecoration: BoxDecoration(color: Colors.black),
+              minScale: PhotoViewComputedScale.contained,
+              maxScale: PhotoViewComputedScale.covered * 2.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showNetworkVideoPreview(String videoUrl, String? fileName) {
+    // Convert to full URL if needed
+    String fullVideoUrl = videoUrl;
+    if (!videoUrl.startsWith('http')) {
+      fullVideoUrl = 'http://10.224.30.163:8080$videoUrl';
+    }
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => VideoPlayerScreen(videoUrl: fullVideoUrl),
+      ),
+    );
+  }
+
+  void _playNetworkAudio(String audioUrl) {
+    _playAudio(audioUrl); // Use existing audio playback
+  }
+
+// ==========================================================================
+// HELPER: CHECK IF MESSAGE IS FROM CURRENT USER
+// ==========================================================================
+
+  bool _isMessageFromCurrentUser(String mediaUrl) {
+    // Find the message that contains this media URL
+    final message = _messages.firstWhere(
+          (msg) => msg['mediaUrl'] == mediaUrl,
+      orElse: () => {},
+    );
+
+    if (message.isEmpty) return false;
+
+    final senderUid = message['sender']?['uid'];
+    return senderUid == widget.currentUserUid;
+  }
+
+  // ==========================================================================
   // ATTACHMENT OPTIONS
   // ==========================================================================
 
@@ -1586,16 +2151,28 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
               icon: Icon(Icons.arrow_back, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
+            title: Text(
+              'Image Viewer',
+              style: GoogleFonts.poppins(
+                color: Colors.white,
+                fontSize: 16,
+              ),
+            ),
             actions: [
-              IconButton(
-                icon: Icon(Icons.download_rounded, color: Colors.white),
-                onPressed: () async {
-                  try {
-                    // TODO: Implement download functionality
-                    _showSnackBar('Download feature coming soon!');
-                  } catch (e) {
-                    _showSnackBar('Download failed: $e', isError: true);
-                  }
+              // Download Button
+              FutureBuilder<bool>(
+                future: _isMediaDownloaded(imageUrl),
+                builder: (context, snapshot) {
+                  final isDownloaded = snapshot.data ?? false;
+                  return IconButton(
+                    icon: Icon(
+                      isDownloaded ? Icons.download_done : Icons.download_rounded,
+                      color: Colors.white,
+                    ),
+                    onPressed: () => isDownloaded
+                        ? _showSnackBar('Already downloaded')
+                        : _downloadMedia(imageUrl, 'IMAGE', null),
+                  );
                 },
               ),
               IconButton(
@@ -1611,53 +2188,58 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
               ),
             ],
           ),
-          body: Center(
-            child: PhotoView(
-              imageProvider: NetworkImage(imageUrl),
-              backgroundDecoration: BoxDecoration(
-                color: Colors.black,
-              ),
-              minScale: PhotoViewComputedScale.contained,
-              maxScale: PhotoViewComputedScale.covered * 2.0,
-              initialScale: PhotoViewComputedScale.contained,
-              heroAttributes: PhotoViewHeroAttributes(tag: imageUrl),
-              loadingBuilder: (context, event) => Center(
-                child: Container(
-                  width: 100,
-                  height: 100,
-                  child: CircularProgressIndicator(
-                    value: event == null
-                        ? 0
-                        : event.cumulativeBytesLoaded / event.expectedTotalBytes!,
-                    valueColor: AlwaysStoppedAnimation(Colors.white),
+          body: FutureBuilder<String?>(
+            future: _getLocalMediaPath(imageUrl),
+            builder: (context, snapshot) {
+              final localPath = snapshot.data;
+              final imageProvider = localPath != null
+                  ? FileImage(File(localPath))
+                  : NetworkImage(imageUrl) as ImageProvider;
+
+              return Center(
+                child: PhotoView(
+                  imageProvider: imageProvider,
+                  backgroundDecoration: BoxDecoration(color: Colors.black),
+                  minScale: PhotoViewComputedScale.contained,
+                  maxScale: PhotoViewComputedScale.covered * 2.0,
+                  initialScale: PhotoViewComputedScale.contained,
+                  heroAttributes: PhotoViewHeroAttributes(tag: imageUrl),
+                  loadingBuilder: (context, event) => Center(
+                    child: Container(
+                      width: 100,
+                      height: 100,
+                      child: CircularProgressIndicator(
+                        valueColor: AlwaysStoppedAnimation(Colors.white),
+                      ),
+                    ),
+                  ),
+                  errorBuilder: (context, error, stackTrace) => Center(
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.error_outline, size: 64, color: Colors.white),
+                        SizedBox(height: 16),
+                        Text(
+                          'Failed to load image',
+                          style: GoogleFonts.poppins(
+                            fontSize: 16,
+                            color: Colors.white,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Tap to retry',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.white70,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
-              ),
-              errorBuilder: (context, error, stackTrace) => Center(
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Icon(Icons.error_outline, size: 64, color: Colors.white),
-                    SizedBox(height: 16),
-                    Text(
-                      'Failed to load image',
-                      style: GoogleFonts.poppins(
-                        fontSize: 16,
-                        color: Colors.white,
-                      ),
-                    ),
-                    SizedBox(height: 8),
-                    Text(
-                      'Tap to retry',
-                      style: GoogleFonts.poppins(
-                        fontSize: 12,
-                        color: Colors.white70,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       ),
