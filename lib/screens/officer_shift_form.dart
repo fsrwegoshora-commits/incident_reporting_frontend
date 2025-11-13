@@ -179,10 +179,8 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                                 "endTime": "${_endTime!.hour.toString().padLeft(2, '0')}:${_endTime!.minute.toString().padLeft(2, '0')}",
                                         },
                                 };
-                                print('Save Shift Variables: $variables');
 
                                 final response = await gql.sendAuthenticatedMutation(saveShiftMutation, variables);
-                                print('Save Shift Response: $response');
 
                                 if (response['errors'] != null) {
                                         throw Exception(response['errors'][0]['message']);

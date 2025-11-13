@@ -78,7 +78,6 @@ class _OfficerIncidentsScreenState extends State<OfficerIncidentsScreen>
     try {
       final gql = GraphQLService();
 
-      // Chagua endpoint kulingana na role
       final bool isStationAdmin = _userRole == 'STATION_ADMIN' || _userRole == 'ROOT';
       final String query = isStationAdmin ? getStationIncidentsQuery : getOfficerIncidentsQuery;
       final String dataKey = isStationAdmin ? 'getStationIncidents' : 'getOfficerIncidents';
@@ -121,7 +120,6 @@ class _OfficerIncidentsScreenState extends State<OfficerIncidentsScreen>
     try {
       final gql = GraphQLService();
 
-      // Station Admin hawawezi kuwa na "my incidents" kama officers
       if (_userRole == 'STATION_ADMIN' || _userRole == 'ROOT') {
         // Tumia station incidents filtered na status IN_PROGRESS
         final response = await gql.sendAuthenticatedQuery(

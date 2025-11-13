@@ -346,7 +346,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     try {
       String fullMediaUrl = mediaUrl;
       if (!mediaUrl.startsWith('http')) {
-        fullMediaUrl = 'http://10.224.30.163:8080$mediaUrl';
+        fullMediaUrl = 'http://10.146.243.163:8080$mediaUrl';
       }
 
       // Prepare the complete message DTO
@@ -1952,7 +1952,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     // Convert to full URL if needed
     String fullVideoUrl = videoUrl;
     if (!videoUrl.startsWith('http')) {
-      fullVideoUrl = 'http://10.224.30.163:8080$videoUrl';
+      fullVideoUrl = 'http://10.146.243.163:8080$videoUrl';
     }
 
     Navigator.push(
