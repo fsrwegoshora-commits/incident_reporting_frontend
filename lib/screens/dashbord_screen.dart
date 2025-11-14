@@ -1,12 +1,15 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 import 'package:incident_reporting_frontend/screens/register_screen.dart';
 import 'package:incident_reporting_frontend/screens/report_incident_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/graphql_service.dart';
+import '../services/notifications_service.dart';
 import '../utils/auth_utils.dart';
 import '../utils/graphql_query.dart';
 import '../theme/app_theme.dart';
@@ -14,6 +17,7 @@ import 'my_incidents_screen.dart';
 import 'officer_incidents_screen.dart';
 import 'user_management_screen.dart';
 import 'police_station_management_screen.dart';
+import 'notifications_screen.dart';
 
 // ============================================================================
 // MODERN INCIDENT DASHBOARD - Complete Version
@@ -67,17 +71,30 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   late Animation<double> _fadeAnimation;
   late Animation<double> _pulseAnimation;
 
+  NotificationsService? _notificationsService;
+  Timer? _notificationRefreshTimer;
+
   @override
   void initState() {
     super.initState();
     _initializeAnimations();
     _loadUserData();
+
+    // Setup notifications after first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _setupNotifications();
+    });
   }
 
   @override
   void dispose() {
     _animationController.dispose();
     _stationsLoadingController.dispose();
+
+    // Clean up notifications
+    _notificationRefreshTimer?.cancel();
+    _notificationsService?.removeListener(_onNotificationsChanged);
+
     super.dispose();
   }
 
@@ -183,6 +200,52 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     } finally {
       setState(() => _isLoadingShifts = false);
     }
+  }
+
+  // ============================================================================
+  // NOTIFICATIONS
+  // ============================================================================
+
+  void _setupNotifications() {
+    try {
+      _notificationsService = Provider.of<NotificationsService>(context, listen: false);
+
+      // Fetch initial notifications
+      _notificationsService?.fetchNotifications();
+      _notificationsService?.fetchUnreadCount();
+
+      // Listen for notification updates
+      _notificationsService?.addListener(_onNotificationsChanged);
+
+      // Auto-refresh unread count every 30 seconds
+      _notificationRefreshTimer = Timer.periodic(Duration(seconds: 30), (_) {
+        if (mounted) {
+          _notificationsService?.fetchUnreadCount();
+        }
+      });
+
+      print("✅ Notifications setup complete");
+    } catch (e) {
+      print("❌ Error setting up notifications: $e");
+    }
+  }
+
+  void _onNotificationsChanged() {
+    print("🔔 Notifications updated - rebuilding");
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  void _openNotifications() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NotificationsScreen()),
+    ).then((_) {
+      // Refresh when coming back
+      _notificationsService?.fetchNotifications();
+      _notificationsService?.fetchUnreadCount();
+    });
   }
 
   // ============================================================================
@@ -630,6 +693,428 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   // ============================================================================
+  // NOTIFICATION WIDGETS
+  // ============================================================================
+
+  Widget _buildNotificationsSummaryCard() {
+    return Consumer<NotificationsService>(
+      builder: (context, service, _) {
+        // Only show if there are unread notifications
+        if (service.unreadCount == 0) {
+          return SizedBox.shrink();
+        }
+
+        // Get latest notifications
+        final unreadNotifications = service.getUnreadNotifications().take(3).toList();
+
+        return Container(
+          margin: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Color(0xFF2E5BFF).withOpacity(0.95),
+                Color(0xFF1E3A8A).withOpacity(0.95),
+              ],
+            ),
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: [
+              BoxShadow(
+                color: Color(0xFF2E5BFF).withOpacity(0.2),
+                blurRadius: 12,
+                offset: Offset(0, 4),
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // Header
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.notifications_active_rounded,
+                      color: Colors.white,
+                      size: 18,
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'New Notifications',
+                          style: GoogleFonts.poppins(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                        Text(
+                          '${service.unreadCount} unread',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            color: Colors.white.withOpacity(0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  // View all button
+                  GestureDetector(
+                    onTap: _openNotifications,
+                    child: Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'View All',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: Colors.white,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              if (unreadNotifications.isNotEmpty) ...[
+                SizedBox(height: 12),
+                Container(
+                  height: 1,
+                  color: Colors.white.withOpacity(0.1),
+                ),
+                SizedBox(height: 12),
+                ...unreadNotifications.map((notification) {
+                  return Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Container(
+                          width: 6,
+                          height: 6,
+                          margin: EdgeInsets.only(top: 6),
+                          decoration: BoxDecoration(
+                            color: notification.getTypeColor(),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                notification.title,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color: Colors.white,
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              if (notification.message != null)
+                                Text(
+                                  notification.message!,
+                                  style: GoogleFonts.poppins(
+                                    fontSize: 11,
+                                    color: Colors.white.withOpacity(0.7),
+                                  ),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }).toList(),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAlertBanner() {
+    return Consumer<NotificationsService>(
+      builder: (context, service, _) {
+        // Check for urgent notifications
+        final urgentNotifications = service.notifications
+            .where((n) =>
+                n.type.toUpperCase().contains('INCIDENT') ||
+                n.type.toUpperCase().contains('ASSIGNED'))
+            .where((n) => !n.isRead)
+            .toList();
+
+        if (urgentNotifications.isEmpty) {
+          return SizedBox.shrink();
+        }
+
+        return Container(
+          margin: EdgeInsets.all(20),
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Color(0xFFFF6B6B).withOpacity(0.1),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: Color(0xFFFF6B6B).withOpacity(0.3),
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: Color(0xFFFF6B6B),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Icon(
+                  Icons.warning_rounded,
+                  color: Colors.white,
+                  size: 20,
+                ),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Urgent Notifications',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFFFF6B6B),
+                      ),
+                    ),
+                    Text(
+                      'You have ${urgentNotifications.length} unread urgent notification${urgentNotifications.length > 1 ? 's' : ''}',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        color: Color(0xFFFF6B6B).withOpacity(0.7),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: _openNotifications,
+                child: Text(
+                  'View',
+                  style: GoogleFonts.poppins(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFFFF6B6B),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildRecentActivitySection() {
+    return Consumer<NotificationsService>(
+      builder: (context, service, _) {
+        if (service.notifications.isEmpty) {
+          return SizedBox.shrink();
+        }
+
+        final recentNotifications = service.notifications.take(5).toList();
+
+        return Container(
+          margin: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'Recent Activity',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w600,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+              SizedBox(height: 12),
+              ...recentNotifications.map((notification) {
+                return Container(
+                  margin: EdgeInsets.only(bottom: 8),
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: notification.isRead ? Color(0xFFE8EBF0) : notification.getTypeColor().withOpacity(0.2),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        notification.getTypeIcon(),
+                        color: notification.getTypeColor(),
+                        size: 20,
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              notification.title,
+                              style: GoogleFonts.poppins(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: Color(0xFF1A1F36),
+                              ),
+                            ),
+                            if (notification.message != null)
+                              Text(
+                                notification.message!,
+                                style: GoogleFonts.poppins(
+                                  fontSize: 11,
+                                  color: Color(0xFF8F9BB3),
+                                ),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                          ],
+                        ),
+                      ),
+                      if (!notification.isRead)
+                        Container(
+                          width: 8,
+                          height: 8,
+                          decoration: BoxDecoration(
+                            color: Color(0xFF2E5BFF),
+                            shape: BoxShape.circle,
+                          ),
+                        ),
+                    ],
+                  ),
+                );
+              }).toList(),
+              SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: TextButton(
+                  onPressed: _openNotifications,
+                  child: Text(
+                    'View All Activity',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: Color(0xFF2E5BFF),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildQuickActionButtons() {
+    return Container(
+      margin: EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Quick Actions',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+          SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  onTap: _navigateToReportIncident,
+                  child: Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(Icons.warning_rounded, color: Colors.white, size: 24),
+                        SizedBox(height: 8),
+                        Text(
+                          'Report Incident',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: GestureDetector(
+                  onTap: _openNotifications,
+                  child: Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFF51CF66), Color(0xFF2B7A34)],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(Icons.notifications_rounded, color: Colors.white, size: 24),
+                        SizedBox(height: 8),
+                        Text(
+                          'Notifications',
+                          style: GoogleFonts.poppins(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: Colors.white,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ============================================================================
   // BUILD METHOD
   // ============================================================================
 
@@ -773,6 +1258,64 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               ],
             ),
           ),
+          SizedBox(width: 16),
+          // Notification Icon with Badge
+          Stack(
+            children: [
+              // Notification bell icon
+              GestureDetector(
+                onTap: _openNotifications,
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Color(0xFF2E5BFF).withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(
+                    Icons.notifications_rounded,
+                    color: Color(0xFF2E5BFF),
+                    size: 20,
+                  ),
+                ),
+              ),
+
+              // Unread badge
+              Consumer<NotificationsService>(
+                builder: (context, service, _) {
+                  return service.unreadCount > 0
+                      ? Positioned(
+                          right: 0,
+                          top: 0,
+                          child: Container(
+                            padding: EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: Color(0xFFFF6B6B),
+                              shape: BoxShape.circle,
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Color(0xFFFF6B6B).withOpacity(0.4),
+                                  blurRadius: 8,
+                                  spreadRadius: 2,
+                                ),
+                              ],
+                            ),
+                            child: Text(
+                              service.unreadCount > 99 ? '99+' : '${service.unreadCount}',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: Colors.white,
+                              ),
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        )
+                      : SizedBox.shrink();
+                },
+              ),
+            ],
+          ),
         ],
       ),
     );
@@ -902,16 +1445,25 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // ============================================================================
 
   Widget _buildShiftsSection() {
-    return Container(
-      margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Shifts Header
-          Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Alert Banner for urgent notifications
+        _buildAlertBanner(),
+
+        // Notifications Summary Card
+        _buildNotificationsSummaryCard(),
+
+        // Shifts Header
+        Container(
+          margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'My Shifts',
+              Row(
+                children: [
+                  Text(
+                    'My Shifts',
                 style: GoogleFonts.poppins(
                   fontSize: 16,
                   fontWeight: FontWeight.w700,
@@ -949,8 +1501,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           // Officer Incidents Card - ADD THIS SECTION
           SizedBox(height: 24),
           _buildOfficerIncidentsCard(),
-        ],
-      ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -1449,59 +2003,77 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   Widget _buildCitizenContent() {
-    return Container(
-      margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'My Reports',
-            style: GoogleFonts.poppins(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF1A1F36),
-            ),
-          ),
-          SizedBox(height: 16),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Alert Banner for urgent notifications
+        _buildAlertBanner(),
 
-          // Citizen Incidents Card
-          _buildCitizenIncidentsCard(),
+        // Notifications Summary Card
+        _buildNotificationsSummaryCard(),
 
-          SizedBox(height: 16),
+        // Recent Activity Section
+        _buildRecentActivitySection(),
 
-          // Recent incidents list (optional)
-          Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Colors.white,
-              borderRadius: BorderRadius.circular(16),
-            ),
-            child: Column(
-              children: [
-                Icon(Icons.description_outlined, size: 48, color: Color(0xFF8F9BB3)),
-                SizedBox(height: 12),
-                Text(
-                  'No reports yet',
-                  style: GoogleFonts.poppins(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w600,
-                    color: Color(0xFF1A1F36),
-                  ),
+        // Quick Action Buttons
+        _buildQuickActionButtons(),
+
+        // Original content
+        Container(
+          margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'My Reports',
+                style: GoogleFonts.poppins(
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1A1F36),
                 ),
-                SizedBox(height: 8),
-                Text(
-                  'Your incident reports will appear here',
-                  style: GoogleFonts.poppins(
-                    fontSize: 12,
-                    color: Color(0xFF8F9BB3),
-                  ),
-                  textAlign: TextAlign.center,
+              ),
+              SizedBox(height: 16),
+
+              // Citizen Incidents Card
+              _buildCitizenIncidentsCard(),
+
+              SizedBox(height: 16),
+
+              // Recent incidents list (optional)
+              Container(
+                padding: EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.circular(16),
                 ),
-              ],
-            ),
+                child: Column(
+                  children: [
+                    Icon(Icons.description_outlined, size: 48, color: Color(0xFF8F9BB3)),
+                    SizedBox(height: 12),
+                    Text(
+                      'No reports yet',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Color(0xFF1A1F36),
+                      ),
+                    ),
+                    SizedBox(height: 8),
+                    Text(
+                      'Your incident reports will appear here',
+                      style: GoogleFonts.poppins(
+                        fontSize: 12,
+                        color: Color(0xFF8F9BB3),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
