@@ -57,6 +57,38 @@ class FirebaseMessagingService {
       print("📱 Notification permission status: ${settings.authorizationStatus}");
 
       if (settings.authorizationStatus == AuthorizationStatus.authorized) {
+        // ✅ NEW: Make sure user UID is saved
+        final prefs = await SharedPreferences.getInstance();
+        String? userUid = prefs.getString('user_uid');
+
+        // If not saved, try to fetch from GraphQL
+        if (userUid == null) {
+          print("⚠️  User UID not found, fetching from GraphQL...");
+          try {
+            final gql = GraphQLService();
+            const String meQuery = '''
+            query {
+              me {
+                data {
+                  uid
+                }
+              }
+            }
+          ''';
+
+            final response = await gql.sendAuthenticatedQuery(meQuery, {});
+            final user = response['data']?['me']?['data'];
+
+            if (user != null && user['uid'] != null) {
+              userUid = user['uid'];
+              await prefs.setString('user_uid', userUid!);
+              print("✅ Saved user UID: $userUid");
+            }
+          } catch (e) {
+            print("⚠️  Could not fetch user UID: $e");
+          }
+        }
+
         // Get FCM token
         String? token = await _firebaseMessaging.getToken();
         print("✅ FCM Token: $token");
@@ -94,7 +126,6 @@ class FirebaseMessagingService {
       print("❌ Error initializing Firebase Messaging: $e");
     }
   }
-
   // ============================================================================
   // LOCAL NOTIFICATIONS SETUP
   // ============================================================================
@@ -291,40 +322,91 @@ class FirebaseMessagingService {
   Future<void> _registerDeviceToken(String token) async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final userUid = prefs.getString('user_uid');
 
-      if (userUid == null) {
-        print("⚠️ User UID not found in SharedPreferences");
+      String? userUid = prefs.getString('user_uid');
+
+      print("🔍 Checking user UID...");
+      print("   Current UID in SharedPreferences: ${userUid ?? 'NOT FOUND'}");
+
+      // If not in preferences, try to get from GraphQL (with authentication)
+      if (userUid == null || userUid.isEmpty) {
+        print("⚠️  User UID not in SharedPreferences, trying to fetch from GraphQL...");
+
+        try {
+          final gql = GraphQLService();
+
+          // Use 'me' query to get current user
+          const String meQuery = '''
+          query {
+            me {
+              status
+              data {
+                uid
+                name
+                phoneNumber
+              }
+            }
+          }
+        ''';
+
+          final response = await gql.sendAuthenticatedQuery(meQuery, {});
+
+          if (response.containsKey('errors')) {
+            print("❌ GraphQL error: ${response['errors']}");
+          } else {
+            final user = response['data']?['me']?['data'];
+
+            if (user != null && user['uid'] != null) {
+              userUid = user['uid'];
+              await prefs.setString('user_uid', userUid!);
+              print("✅ Retrieved and saved user UID from API: $userUid");
+            } else {
+              print("❌ No user data in API response");
+            }
+          }
+        } catch (e) {
+          print("⚠️  Error fetching from GraphQL: $e");
+        }
+      }
+
+      // If still null, skip registration
+      if (userUid == null || userUid.isEmpty) {
+        print("❌ Cannot register device token - User UID is null");
+        print("   (User might not be logged in yet)");
         return;
       }
+
+      print("✅ Found user UID: $userUid");
 
       final gql = GraphQLService();
 
       const String mutation = '''
-        mutation registerDeviceToken(
-          \$userUid: String!
-          \$token: String!
-          \$deviceType: String!
-          \$appVersion: String!
+      mutation registerDeviceToken(
+        \$userUid: String!
+        \$token: String!
+        \$deviceType: String!
+        \$appVersion: String!
+      ) {
+        registerDeviceToken(
+          userUid: \$userUid
+          token: \$token
+          deviceType: \$deviceType
+          appVersion: \$appVersion
         ) {
-          registerDeviceToken(
-            userUid: \$userUid
-            token: \$token
-            deviceType: \$deviceType
-            appVersion: \$appVersion
-          ) {
-            success
-            message
-            data {
-              uid
-              token
-              deviceType
-              isActive
-              lastUsedAt
-            }
+          status
+          message
+          data {
+            uid
+            token
+            deviceType
+            isActive
+            lastUsedAt
           }
         }
-      ''';
+      }
+    ''';
+
+      print("📱 Registering device token for user: $userUid");
 
       final response = await gql.sendAuthenticatedQuery(mutation, {
         'userUid': userUid,
@@ -336,14 +418,30 @@ class FirebaseMessagingService {
       if (response.containsKey('errors')) {
         print("❌ Error registering device token: ${response['errors']}");
       } else {
+        final status = response['data']?['registerDeviceToken']?['status'];
+        final message = response['data']?['registerDeviceToken']?['message'];
         final data = response['data']?['registerDeviceToken']?['data'];
-        if (data != null) {
+
+        print("📡 Response status: $status");
+        print("📡 Response message: $message");
+
+        if (status != null && data != null) {
           await prefs.setString('device_token', token);
-          print("✅ Device token registered successfully");
+          print("✅ Device token registered successfully!");
+          print("   Token: ${data['token']}");
+          print("   Device Type: ${data['deviceType']}");
+          print("   Active: ${data['isActive']}");
+        } else {
+          print("⚠️  Registration validation failed");
+          print("   Status: $status (expected: OK or similar)");
+          print("   Message: $message");
+          print("   Data: $data");
         }
       }
     } catch (e) {
       print("❌ Error registering device token: $e");
+      e.toString().contains('SocketException') ?
+      print("   (Network error - will retry on next token refresh)") : null;
     }
   }
 

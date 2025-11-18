@@ -346,7 +346,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     try {
       String fullMediaUrl = mediaUrl;
       if (!mediaUrl.startsWith('http')) {
-        fullMediaUrl = 'http://10.146.243.163:8080$mediaUrl';
+        fullMediaUrl = 'http://10.29.242.163:8080$mediaUrl';
       }
 
       // Prepare the complete message DTO

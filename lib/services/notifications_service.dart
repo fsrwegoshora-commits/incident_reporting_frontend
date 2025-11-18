@@ -283,6 +283,56 @@ class NotificationsService extends ChangeNotifier {
   }
 
   // ============================================================================
+  // CLEAR NOTIFICATIONS
+  // ============================================================================
+
+  Future<bool> clearNotifications(String userUid) async {
+    try {
+      _isLoading = true;
+      notifyListeners();
+
+      const String mutation = '''
+        mutation clearNotifications(\$userUid: String!) {
+          clearNotifications(userUid: \$userUid) {
+            status
+            message
+            data {
+              uid
+              title
+              message
+              type
+              read
+            }
+          }
+        }
+      ''';
+
+      final response = await _gql.sendAuthenticatedQuery(mutation, {
+        'userUid': userUid,
+      });
+
+      if (response.containsKey('errors')) {
+        _error = 'Failed to clear notifications: ${response['errors']}';
+        print("❌ Error clearing notifications: ${response['errors']}");
+        return false;
+      } else {
+        _notifications.clear();
+        _unreadCount = 0;
+        print("✅ All notifications cleared successfully");
+        notifyListeners();
+        return true;
+      }
+    } catch (e) {
+      _error = 'Error clearing notifications: $e';
+      print("❌ $e");
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  // ============================================================================
   // REFRESH
   // ============================================================================
 

@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:incident_reporting_frontend/services/websocket_notification_service.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/graphql_service.dart';
@@ -41,6 +42,7 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
   final gql = GraphQLService();
   late FirebaseMessagingService _firebaseMessagingService;
   late NotificationsService _notificationsService;
+  late WebSocketNotificationsService _webSocketService; // ADDED
   bool _isInitialized = false;
 
   @override
@@ -60,6 +62,10 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
       // Initialize Notifications Service
       _notificationsService = NotificationsService();
       print("✅ Notifications Service initialized");
+
+      // Initialize WebSocket Service
+      _webSocketService = WebSocketNotificationsService();
+      print("✅ WebSocket Service initialized");
 
       // Initialize Firebase Messaging Service
       _firebaseMessagingService = FirebaseMessagingService();
@@ -100,15 +106,105 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
     }
   }
 
+  // ============================================================================
+  // INITIALIZE WEBSOCKET AFTER LOGIN/TOKEN VALIDATION
+  // ============================================================================
+
+  Future<void> _initializeWebSocket(String userUid, String token) async {
+    try {
+      print("🔌 Initializing WebSocket for user: $userUid");
+
+      await _webSocketService.connect(
+          userUid,
+          token,
+          notificationsService: _notificationsService
+      );
+
+      // Set up WebSocket callbacks
+      _webSocketService.onNotificationReceived = (NotificationModel notification) {
+        print("🎯 WebSocket notification received: ${notification.title}");
+
+        // This will automatically update the UI via NotificationsService
+        _notificationsService.addNotification(notification);
+
+        // Show snackbar or toast
+        _showNewNotificationSnackbar(notification);
+      };
+
+      _webSocketService.onConnectionStatusChanged = (bool connected) {
+        print(connected ? "✅ WebSocket connected" : "❌ WebSocket disconnected");
+      };
+
+      print("✅ WebSocket initialization complete");
+
+    } catch (e) {
+      print("❌ WebSocket initialization failed: $e");
+    }
+  }
+
+  void _showNewNotificationSnackbar(NotificationModel notification) {
+    // You can show a snackbar when new notification arrives
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('🔔 ${notification.title}'),
+        duration: Duration(seconds: 3),
+      ),
+    );
+  }
+
+  // ============================================================================
+  // TEST WEBSOCKET CONNECTION
+  // ============================================================================
+
+  void _testWebSocketConnection() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userUid = prefs.getString('userUid');
+    final token = prefs.getString('jwt_token');
+
+    if (userUid != null && token != null) {
+      print("🧪 Testing WebSocket connection...");
+      _webSocketService.sendTestMessage();
+    } else {
+      print("❌ Cannot test WebSocket - user not logged in");
+    }
+  }
+
+  // ============================================================================
+  // TEST PUSH NOTIFICATION
+  // ============================================================================
+
+  void _testPushNotification() async {
+    final prefs = await SharedPreferences.getInstance();
+    final userUid = prefs.getString('userUid');
+
+    if (userUid == null) {
+      print("❌ Cannot test push - user not logged in");
+      return;
+    }
+
+    try {
+      final response = await gql.sendAuthenticatedQuery('''
+        mutation TestPushNotification {
+          testPushNotification
+        }
+      ''', {});
+
+      print("🧪 Push test response: $response");
+    } catch (e) {
+      print("❌ Push test failed: $e");
+    }
+  }
+
   Future<bool> _hasValidToken() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final token = prefs.getString('jwt_token');
+      final userUid = prefs.getString('userUid');
 
-      print('🔍 Checking token...'); // Debug
+      print('🔍 Checking token...');
 
       if (token == null || token.isEmpty) {
-        print('❌ No token found'); // Debug
+        print('❌ No token found');
         return false;
       }
 
@@ -117,12 +213,18 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
         {"token": token},
       );
 
-      print("📡 Validate token response: $response"); // Debug
+      print("📡 Validate token response: $response");
 
       final result = response['data']?['validateToken'];
       final isValid = result?['data'] == true;
 
-      print(isValid ? '✅ Token valid' : '❌ Token invalid'); // Debug
+      print(isValid ? '✅ Token valid' : '❌ Token invalid');
+
+      // ✅ INITIALIZE WEBSOCKET IF TOKEN IS VALID
+      if (isValid && userUid != null) {
+        print("🚀 Initializing WebSocket after token validation...");
+        _initializeWebSocket(userUid, token);
+      }
 
       return isValid;
     } catch (e) {
@@ -134,6 +236,7 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
   @override
   void dispose() {
     _firebaseMessagingService.dispose();
+    _webSocketService.disconnect(); // DISCONNECT WEBSOCKET
     super.dispose();
   }
 
@@ -141,13 +244,10 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        // ====================================================================
-        // NOTIFICATIONS SERVICE PROVIDER
-        // ====================================================================
         ChangeNotifierProvider<NotificationsService>(
           create: (_) => _notificationsService,
         ),
-        // Add other providers here if you have them
+        // Add WebSocket service provider if needed
       ],
       child: MaterialApp(
         title: 'Smart Incident App',
@@ -156,13 +256,13 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
           primarySwatch: Colors.blue,
           visualDensity: VisualDensity.adaptivePlatformDensity,
         ),
-
-        // Initial Route
         initialRoute: '/',
-
-        // Named Routes
         routes: {
-          '/': (context) => SplashScreen(hasValidToken: _hasValidToken),
+          '/': (context) => SplashScreen(
+            hasValidToken: _hasValidToken,
+            testWebSocket: _testWebSocketConnection, // ADDED
+            testPush: _testPushNotification, // ADDED
+          ),
           '/register': (context) => RegisterScreen(),
           '/otp': (context) => OtpScreen(
             phoneNumber: ModalRoute.of(context)?.settings.arguments as String? ?? '',
@@ -170,8 +270,6 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
           '/dashboard': (context) => DashboardScreen(),
           '/notifications': (context) => NotificationsScreen(),
         },
-
-        // Fallback route handler
         onUnknownRoute: (settings) {
           print('⚠️ Unknown route: ${settings.name}');
           return MaterialPageRoute(
@@ -184,13 +282,20 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
 }
 
 // ============================================================================
-// SPLASH SCREEN - Better UX while checking token & initializing services
+// ENHANCED SPLASH SCREEN WITH DEBUG OPTIONS
 // ============================================================================
 
 class SplashScreen extends StatefulWidget {
   final Future<bool> Function() hasValidToken;
+  final VoidCallback? testWebSocket; // ADDED
+  final VoidCallback? testPush; // ADDED
 
-  const SplashScreen({Key? key, required this.hasValidToken}) : super(key: key);
+  const SplashScreen({
+    Key? key,
+    required this.hasValidToken,
+    this.testWebSocket,
+    this.testPush,
+  }) : super(key: key);
 
   @override
   _SplashScreenState createState() => _SplashScreenState();
@@ -198,6 +303,7 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen> {
   String _statusMessage = 'Loading...';
+  bool _showDebugOptions = false; // ADDED
 
   @override
   void initState() {
@@ -239,86 +345,159 @@ class _SplashScreenState extends State<SplashScreen> {
 
       if (!mounted) return;
 
-      setState(() => _statusMessage = 'Error. Trying again...');
-
-      // Retry after 2 seconds
-      await Future.delayed(Duration(seconds: 2));
-
-      if (!mounted) return;
-
-      Navigator.of(context).pushReplacementNamed('/register');
+      setState(() {
+        _statusMessage = 'Error. Tap to retry...';
+        _showDebugOptions = true; // Show debug options on error
+      });
     }
+  }
+
+  void _retryAuth() {
+    setState(() {
+      _statusMessage = 'Retrying...';
+      _showDebugOptions = false;
+    });
+    _checkAuthAndNavigate();
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: Color(0xFF2E5BFF),
-      body: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            // App Logo/Icon
-            Container(
-              width: 100,
-              height: 100,
-              decoration: BoxDecoration(
-                color: Colors.white,
-                shape: BoxShape.circle,
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 20,
-                    offset: Offset(0, 10),
+      body: GestureDetector(
+        onTap: _retryAuth, // Allow tap to retry
+        child: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              // App Logo/Icon
+              Container(
+                width: 100,
+                height: 100,
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withOpacity(0.2),
+                      blurRadius: 20,
+                      offset: Offset(0, 10),
+                    ),
+                  ],
+                ),
+                child: Icon(
+                  Icons.shield_rounded,
+                  size: 50,
+                  color: Color(0xFF2E5BFF),
+                ),
+              ),
+              SizedBox(height: 30),
+
+              // App Name
+              Text(
+                'Smart Incident',
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.white,
+                ),
+              ),
+              SizedBox(height: 10),
+
+              // Tagline
+              Text(
+                'Report. Track. Stay Safe.',
+                style: TextStyle(
+                  fontSize: 14,
+                  color: Colors.white.withOpacity(0.8),
+                ),
+              ),
+              SizedBox(height: 50),
+
+              // Loading Indicator
+              CircularProgressIndicator(
+                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                strokeWidth: 3,
+              ),
+              SizedBox(height: 20),
+
+              // Status Message
+              Text(
+                _statusMessage,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors.white.withOpacity(0.7),
+                ),
+              ),
+
+              // ============================================================================
+              // DEBUG OPTIONS (Visible only when showDebugOptions is true)
+              // ============================================================================
+              if (_showDebugOptions) ...[
+                SizedBox(height: 30),
+                Container(
+                  padding: EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(12),
                   ),
-                ],
-              ),
-              child: Icon(
-                Icons.shield_rounded,
-                size: 50,
-                color: Color(0xFF2E5BFF),
-              ),
-            ),
-            SizedBox(height: 30),
-
-            // App Name
-            Text(
-              'Smart Incident',
-              style: TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.bold,
-                color: Colors.white,
-              ),
-            ),
-            SizedBox(height: 10),
-
-            // Tagline
-            Text(
-              'Report. Track. Stay Safe.',
-              style: TextStyle(
-                fontSize: 14,
-                color: Colors.white.withOpacity(0.8),
-              ),
-            ),
-            SizedBox(height: 50),
-
-            // Loading Indicator
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-              strokeWidth: 3,
-            ),
-            SizedBox(height: 20),
-
-            // Status Message
-            Text(
-              _statusMessage,
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors.white.withOpacity(0.7),
-              ),
-            ),
-          ],
+                  child: Column(
+                    children: [
+                      Text(
+                        'Debug Options',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 10),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                        children: [
+                          ElevatedButton(
+                            onPressed: widget.testWebSocket,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                            ),
+                            child: Text(
+                              'Test WebSocket',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                          ElevatedButton(
+                            onPressed: widget.testPush,
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.green,
+                            ),
+                            child: Text(
+                              'Test Push',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ],
+          ),
         ),
+      ),
+
+      // ============================================================================
+      // FLOATING DEBUG BUTTON (Always visible for testing)
+      // ============================================================================
+      floatingActionButton: FloatingActionButton(
+        onPressed: () {
+          setState(() {
+            _showDebugOptions = !_showDebugOptions;
+          });
+        },
+        mini: true,
+        backgroundColor: Colors.red,
+        child: Icon(Icons.bug_report),
+        tooltip: 'Debug Options',
       ),
     );
   }

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
+import '../services/graphql_service.dart';
 import '../services/notifications_service.dart';
+import '../utils/graphql_query.dart';
 
 class NotificationsScreen extends StatefulWidget {
   @override
@@ -11,7 +13,8 @@ class NotificationsScreen extends StatefulWidget {
 
 class _NotificationsScreenState extends State<NotificationsScreen> {
   late NotificationsService _notificationsService;
-  String _selectedFilter = 'ALL'; // ALL, UNREAD, INCIDENTS, CHATS, SHIFTS
+  String _selectedFilter = 'ALL';
+  String? _userRole;
 
   @override
   void initState() {
@@ -39,32 +42,171 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
         case 'INCIDENT_ASSIGNED':
         case 'INCIDENT_RESOLVED':
           if (notification.relatedEntityUid != null) {
-            // Navigate to incident details if route exists
-            // For now, just show a snackbar
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Incident details: ${notification.relatedEntityUid}')),
+            Navigator.pushNamed(
+              context,
+              '/incident-details',
+              arguments: {
+                'incidentUid': notification.relatedEntityUid,
+              },
             );
           }
           break;
+
         case 'CHAT_MESSAGE':
           if (notification.relatedEntityUid != null) {
-            // Navigate to chat if route exists
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(content: Text('Chat: ${notification.relatedEntityUid}')),
-            );
+            final userInfo = await _getUserInfo();
+            _userRole = userInfo['role'];
+            if (_userRole == 'POLICE_OFFICER' || _userRole == 'STATION_ADMIN') {
+              Navigator.pushNamed(
+                context,
+                '/police-officer-chat',
+                arguments: {
+                  'chatUid': notification.relatedEntityUid,
+                },
+              );
+            } else {
+              Navigator.pushNamed(
+                context,
+                '/my-incident-chat',
+                arguments: {
+                  'chatUid': notification.relatedEntityUid,
+                },
+              );
+            }
           }
           break;
+
         case 'SHIFT_ASSIGNED':
         case 'SHIFT_REASSIGNED':
-          // Navigate to shifts screen if route exists
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Check your shifts')),
-          );
+          if (notification.relatedEntityUid != null) {
+            Navigator.pushNamed(
+              context,
+              '/shifts',
+              arguments: {
+                'shiftUid': notification.relatedEntityUid,
+              },
+            );
+          } else {
+            Navigator.pushNamed(context, '/shifts');
+          }
           break;
+
         default:
           break;
       }
     }
+  }
+
+  void _showClearConfirmation() {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text(
+            'Clear All Notifications?',
+            style: GoogleFonts.poppins(
+              fontSize: 16,
+              fontWeight: FontWeight.w600,
+              color: Color(0xFF1A1F36),
+            ),
+          ),
+          content: Text(
+            'This action will permanently delete all read notifications. This cannot be undone.',
+            style: GoogleFonts.poppins(
+              fontSize: 14,
+              color: Color(0xFF5F7285),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: Text(
+                'Cancel',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w500,
+                  color: Color(0xFF8F9BB3),
+                ),
+              ),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _handleClearNotifications();
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Color(0xFFFF6B6B),
+              ),
+              child: Text(
+                'Clear',
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white,
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _handleClearNotifications() async {
+    final userInfo = await _getUserInfo();
+    final String? userUid = userInfo['uid'];
+
+    if (userUid == null || userUid.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Unable to retrieve user information'),
+            backgroundColor: Color(0xFFFF6B6B),
+          ),
+        );
+      }
+      return;
+    }
+
+    final success = await _notificationsService.clearNotifications(userUid);
+
+    if (mounted) {
+      if (success) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('All notifications cleared'),
+            backgroundColor: Color(0xFF51CF66),
+          ),
+        );
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(_notificationsService.error ?? 'Failed to clear notifications'),
+            backgroundColor: Color(0xFFFF6B6B),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<Map<String, String>> _getUserInfo() async {
+    final gql = GraphQLService();
+    final response = await gql.sendAuthenticatedQuery(meQuery, {});
+
+    final user = response['data']?['me']?['data'];
+
+    if (user == null) {
+      return {
+        'uid': '',
+        'role': '',
+      };
+    }
+
+    final userUid = user['uid'] ?? '';
+    final userRole = user['role'] ?? '';
+
+    return {
+      'uid': userUid,
+      'role': userRole,
+    };
   }
 
   List<NotificationModel> _getFilteredNotifications() {
@@ -107,16 +249,51 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
             return _buildEmptyState();
           }
 
-          return RefreshIndicator(
-            onRefresh: _refreshNotifications,
-            child: ListView.builder(
-              padding: EdgeInsets.all(16),
-              itemCount: filteredNotifications.length,
-              itemBuilder: (context, index) {
-                final notification = filteredNotifications[index];
-                return _buildNotificationCard(notification);
-              },
-            ),
+          return Column(
+            children: [
+              _buildFilterChips(),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _refreshNotifications,
+                  child: ListView.builder(
+                    padding: EdgeInsets.all(16),
+                    itemCount: filteredNotifications.length + 1,
+                    itemBuilder: (context, index) {
+                      // Add clear button at the bottom
+                      if (index == filteredNotifications.length) {
+                        return Padding(
+                          padding: EdgeInsets.only(top: 16),
+                          child: SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton.icon(
+                              onPressed: _showClearConfirmation,
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Color(0xFFFF6B6B),
+                                padding: EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                              ),
+                              icon: Icon(Icons.delete_sweep_rounded),
+                              label: Text(
+                                'Clear All Notifications',
+                                style: GoogleFonts.poppins(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      }
+
+                      final notification = filteredNotifications[index];
+                      return _buildNotificationCard(notification);
+                    },
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),

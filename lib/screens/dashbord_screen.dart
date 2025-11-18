@@ -152,6 +152,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
     if (user != null) {
       setState(() {
+        _userUid = user['uid'];
         _userName = user['name'];
         _userPhone = user['phoneNumber'];
         _userRole = user['role'];
