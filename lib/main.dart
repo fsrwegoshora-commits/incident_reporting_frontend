@@ -42,7 +42,7 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
   final gql = GraphQLService();
   late FirebaseMessagingService _firebaseMessagingService;
   late NotificationsService _notificationsService;
-  late WebSocketNotificationsService _webSocketService; // ADDED
+  late WebSocketNotificationsService _webSocketService;
   bool _isInitialized = false;
 
   @override
@@ -260,8 +260,8 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
         routes: {
           '/': (context) => SplashScreen(
             hasValidToken: _hasValidToken,
-            testWebSocket: _testWebSocketConnection, // ADDED
-            testPush: _testPushNotification, // ADDED
+            testWebSocket: _testWebSocketConnection,
+            testPush: _testPushNotification,
           ),
           '/register': (context) => RegisterScreen(),
           '/otp': (context) => OtpScreen(
@@ -282,13 +282,13 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
 }
 
 // ============================================================================
-// ENHANCED SPLASH SCREEN WITH DEBUG OPTIONS
+// SPLASH SCREEN SIMPLIFIED - NO IMAGES
 // ============================================================================
 
 class SplashScreen extends StatefulWidget {
   final Future<bool> Function() hasValidToken;
-  final VoidCallback? testWebSocket; // ADDED
-  final VoidCallback? testPush; // ADDED
+  final VoidCallback? testWebSocket;
+  final VoidCallback? testPush;
 
   const SplashScreen({
     Key? key,
@@ -303,7 +303,7 @@ class SplashScreen extends StatefulWidget {
 
 class _SplashScreenState extends State<SplashScreen> {
   String _statusMessage = 'Loading...';
-  bool _showDebugOptions = false; // ADDED
+  bool _showDebugOptions = false;
 
   @override
   void initState() {
@@ -313,7 +313,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
   Future<void> _checkAuthAndNavigate() async {
     try {
-      // Wait for services to initialize (see _initializeServices in main)
+      // Wait for services to initialize
       await Future.delayed(Duration(milliseconds: 1500));
 
       if (!mounted) return;
@@ -347,7 +347,7 @@ class _SplashScreenState extends State<SplashScreen> {
 
       setState(() {
         _statusMessage = 'Error. Tap to retry...';
-        _showDebugOptions = true; // Show debug options on error
+        _showDebugOptions = true;
       });
     }
   }
@@ -365,35 +365,35 @@ class _SplashScreenState extends State<SplashScreen> {
     return Scaffold(
       backgroundColor: Color(0xFF2E5BFF),
       body: GestureDetector(
-        onTap: _retryAuth, // Allow tap to retry
+        onTap: _retryAuth,
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              // App Logo/Icon
+              // APP ICON - USING FLUTTER ICON ONLY (No image assets)
               Container(
-                width: 100,
-                height: 100,
+                width: 80,
+                height: 80,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   shape: BoxShape.circle,
                   boxShadow: [
                     BoxShadow(
-                      color: Colors.black.withOpacity(0.2),
-                      blurRadius: 20,
-                      offset: Offset(0, 10),
+                      color: Colors.black.withOpacity(0.3),
+                      blurRadius: 15,
+                      offset: Offset(0, 5),
                     ),
                   ],
                 ),
                 child: Icon(
-                  Icons.shield_rounded,
-                  size: 50,
+                  Icons.security_rounded, // Using Flutter built-in icon
+                  size: 40,
                   color: Color(0xFF2E5BFF),
                 ),
               ),
               SizedBox(height: 30),
 
-              // App Name
+              // APP NAME
               Text(
                 'Smart Incident',
                 style: TextStyle(
@@ -404,7 +404,7 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
               SizedBox(height: 10),
 
-              // Tagline
+              // TAGLINE
               Text(
                 'Report. Track. Stay Safe.',
                 style: TextStyle(
@@ -414,14 +414,14 @@ class _SplashScreenState extends State<SplashScreen> {
               ),
               SizedBox(height: 50),
 
-              // Loading Indicator
+              // LOADING INDICATOR
               CircularProgressIndicator(
                 valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
                 strokeWidth: 3,
               ),
               SizedBox(height: 20),
 
-              // Status Message
+              // STATUS MESSAGE
               Text(
                 _statusMessage,
                 style: TextStyle(
@@ -430,9 +430,7 @@ class _SplashScreenState extends State<SplashScreen> {
                 ),
               ),
 
-              // ============================================================================
-              // DEBUG OPTIONS (Visible only when showDebugOptions is true)
-              // ============================================================================
+              // DEBUG OPTIONS
               if (_showDebugOptions) ...[
                 SizedBox(height: 30),
                 Container(
@@ -485,9 +483,7 @@ class _SplashScreenState extends State<SplashScreen> {
         ),
       ),
 
-      // ============================================================================
-      // FLOATING DEBUG BUTTON (Always visible for testing)
-      // ============================================================================
+      // DEBUG BUTTON
       floatingActionButton: FloatingActionButton(
         onPressed: () {
           setState(() {
