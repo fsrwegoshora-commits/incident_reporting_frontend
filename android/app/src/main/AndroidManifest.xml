@@ -1,7 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <!-- ================================================================ -->
-    <!-- 📍 LOCATION PERMISSIONS (Already there) -->
+    <!-- 📍 LOCATION PERMISSIONS -->
     <!-- ================================================================ -->
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
@@ -33,32 +34,39 @@
     <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
 
     <!-- ================================================================ -->
-    <!-- 🌐 INTERNET & NETWORK (For uploads) -->
+    <!-- 🌐 INTERNET & NETWORK -->
     <!-- ================================================================ -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- ================================================================ -->
-    <!-- 🔔 NOTIFICATION PERMISSIONS (For push notifications) -->
+    <!-- 🔔 NOTIFICATION PERMISSIONS -->
     <!-- ================================================================ -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
     <!-- ================================================================ -->
-    <!-- 🎯 FEATURE DECLARATIONS (Tell Play Store what features you use) -->
+    <!-- 🎯 FEATURE DECLARATIONS -->
     <!-- ================================================================ -->
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
     <uses-feature android:name="android.hardware.location.gps" android:required="false" />
 
+    <!-- ================================================================ -->
+    <!-- 🔧 APPLICATION CONFIGURATION (✅ FIXED) -->
+    <!-- ================================================================ -->
     <application
         android:label="smart incident"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:requestLegacyExternalStorage="true"
-        android:usesCleartextTraffic="true">
+        android:usesCleartextTraffic="true"
+        android:enableOnBackInvokedCallback="true">
 
+        <!-- ============================================================ -->
+        <!-- 📱 MAIN ACTIVITY (✅ FIXED) -->
+        <!-- ============================================================ -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -67,16 +75,16 @@
             android:theme="@style/LaunchTheme"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
             android:hardwareAccelerated="true"
-            android:windowSoftInputMode="adjustResize">
+            android:windowSoftInputMode="adjustResize"
+            android:alwaysRetainTaskState="true"
+            android:resumeWhilePausing="true">
 
-            <!-- Specifies an Android theme to apply to this Activity as soon as
-                 the Android process has started. This theme is visible to the user
-                 while the Flutter UI initializes. After that, this theme continues
-                 to determine the Window background behind the Flutter UI. -->
+            <!-- Launch Theme -->
             <meta-data
                 android:name="io.flutter.embedding.android.NormalTheme"
                 android:resource="@style/NormalTheme" />
 
+            <!-- Intent Filter -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
@@ -84,7 +92,7 @@
         </activity>
 
         <!-- ============================================================ -->
-        <!-- 🔥 FIREBASE CLOUD MESSAGING (For push notifications) -->
+        <!-- 🔥 FIREBASE CLOUD MESSAGING -->
         <!-- ============================================================ -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"
@@ -98,15 +106,14 @@
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color" />
 
-        <!-- Don't delete the meta-data below.
-             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <!-- Flutter Embedding -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
     </application>
 
     <!-- ================================================================ -->
-    <!-- 📱 QUERIES (For text processing) -->
+    <!-- 📱 QUERIES -->
     <!-- ================================================================ -->
     <queries>
         <intent>
@@ -114,17 +121,17 @@
             <data android:mimeType="text/plain"/>
         </intent>
 
-        <!-- Query for camera apps -->
+        <!-- Camera apps -->
         <intent>
             <action android:name="android.media.action.IMAGE_CAPTURE" />
         </intent>
 
-        <!-- Query for gallery apps -->
+        <!-- Gallery apps -->
         <intent>
             <action android:name="android.intent.action.PICK" />
         </intent>
 
-        <!-- Query for file picker -->
+        <!-- File picker -->
         <intent>
             <action android:name="android.intent.action.GET_CONTENT" />
         </intent>

@@ -331,7 +331,55 @@ class NotificationsService extends ChangeNotifier {
       notifyListeners();
     }
   }
+  // ============================================================================
+  // MARK NOTIFICATIONS AS READ
+  // ============================================================================
 
+  Future<bool> markAllNotificationsAsRead(String userUid) async {
+    try {
+      _isLoading = true;
+      notifyListeners();
+
+      const String mutation = '''
+        mutation markAllRead(\$userUid: String!) {
+          markAllRead(userUid: \$userUid) {
+            status
+            message
+            data {
+              uid
+              title
+              message
+              type
+              read
+            }
+          }
+        }
+      ''';
+
+      final response = await _gql.sendAuthenticatedQuery(mutation, {
+        'userUid': userUid,
+      });
+
+      if (response.containsKey('errors')) {
+        _error = 'Failed to mark notifications as read: ${response['errors']}';
+        print("❌ Error marking notifications as read: ${response['errors']}");
+        return false;
+      } else {
+        _notifications.clear();
+        _unreadCount = 0;
+        print("✅ All notifications marked as read successfully");
+        notifyListeners();
+        return true;
+      }
+    } catch (e) {
+      _error = 'Error marking notifications as read: $e';
+      print("❌ $e");
+      return false;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
   // ============================================================================
   // REFRESH
   // ============================================================================

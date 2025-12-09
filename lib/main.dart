@@ -1,279 +1,62 @@
-import 'dart:convert';
+// lib/main.dart
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:incident_reporting_frontend/providers/theme_provider.dart';
+import 'package:incident_reporting_frontend/screens/dashbord_screen.dart';
+import 'package:incident_reporting_frontend/screens/register_screen.dart';
+import 'package:incident_reporting_frontend/screens/otp_screen.dart';
+import 'package:incident_reporting_frontend/screens/notifications_screen.dart';
+import 'package:incident_reporting_frontend/services/graphql_service.dart';
+import 'package:incident_reporting_frontend/services/notifications_service.dart';
+import 'package:incident_reporting_frontend/services/firebase_messaging_service.dart';
 import 'package:incident_reporting_frontend/services/websocket_notification_service.dart';
+import 'package:incident_reporting_frontend/utils/graphql_query.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'services/graphql_service.dart';
-import 'services/notifications_service.dart';
-import 'services/firebase_messaging_service.dart';
-import 'utils/graphql_query.dart';
-import 'screens/register_screen.dart';
-import 'screens/otp_screen.dart';
-import 'screens/dashbord_screen.dart';
-import 'screens/notifications_screen.dart';
 import 'firebase_options.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
+import 'theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ============================================================================
-  // INITIALIZE FIREBASE
-  // ============================================================================
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    print("✅ Firebase initialized successfully");
-  } catch (e) {
-    print("❌ Firebase initialization error: $e");
-  }
+  // Initialize Firebase
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
-  runApp(SmartIncidentApp());
+  runApp(const SmartIncidentApp());
 }
 
-class SmartIncidentApp extends StatefulWidget {
-  @override
-  _SmartIncidentAppState createState() => _SmartIncidentAppState();
-}
-
-class _SmartIncidentAppState extends State<SmartIncidentApp> {
-  final gql = GraphQLService();
-  late FirebaseMessagingService _firebaseMessagingService;
-  late NotificationsService _notificationsService;
-  late WebSocketNotificationsService _webSocketService;
-  bool _isInitialized = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _initializeServices();
-  }
-
-  // ============================================================================
-  // INITIALIZE ALL SERVICES
-  // ============================================================================
-
-  Future<void> _initializeServices() async {
-    try {
-      print("🚀 Initializing services...");
-
-      // Initialize Notifications Service
-      _notificationsService = NotificationsService();
-      print("✅ Notifications Service initialized");
-
-      // Initialize WebSocket Service
-      _webSocketService = WebSocketNotificationsService();
-      print("✅ WebSocket Service initialized");
-
-      // Initialize Firebase Messaging Service
-      _firebaseMessagingService = FirebaseMessagingService();
-      print("✅ Firebase Messaging Service initialized");
-
-      // Wait a moment for context to be ready
-      await Future.delayed(Duration(milliseconds: 500));
-
-      // Now initialize Firebase Messaging (after build is complete)
-      WidgetsBinding.instance.addPostFrameCallback((_) async {
-        if (mounted) {
-          try {
-            await _firebaseMessagingService.initialize(
-              context,
-              notificationsService: _notificationsService,
-            );
-            print("✅ Firebase Messaging fully initialized");
-
-            // Set up callbacks
-            _firebaseMessagingService.onMessageCallback = (RemoteMessage message) {
-              print("🔔 Message received in main callback");
-            };
-
-            _firebaseMessagingService.onNotificationTapped = (screen, entityUid) {
-              print("📍 Notification tapped - Screen: $screen, Entity: $entityUid");
-            };
-
-            setState(() => _isInitialized = true);
-          } catch (e) {
-            print("❌ Error initializing Firebase Messaging: $e");
-            setState(() => _isInitialized = true);
-          }
-        }
-      });
-    } catch (e) {
-      print("❌ Error in _initializeServices: $e");
-      setState(() => _isInitialized = true);
-    }
-  }
-
-  // ============================================================================
-  // INITIALIZE WEBSOCKET AFTER LOGIN/TOKEN VALIDATION
-  // ============================================================================
-
-  Future<void> _initializeWebSocket(String userUid, String token) async {
-    try {
-      print("🔌 Initializing WebSocket for user: $userUid");
-
-      await _webSocketService.connect(
-          userUid,
-          token,
-          notificationsService: _notificationsService
-      );
-
-      // Set up WebSocket callbacks
-      _webSocketService.onNotificationReceived = (NotificationModel notification) {
-        print("🎯 WebSocket notification received: ${notification.title}");
-
-        // This will automatically update the UI via NotificationsService
-        _notificationsService.addNotification(notification);
-
-        // Show snackbar or toast
-        _showNewNotificationSnackbar(notification);
-      };
-
-      _webSocketService.onConnectionStatusChanged = (bool connected) {
-        print(connected ? "✅ WebSocket connected" : "❌ WebSocket disconnected");
-      };
-
-      print("✅ WebSocket initialization complete");
-
-    } catch (e) {
-      print("❌ WebSocket initialization failed: $e");
-    }
-  }
-
-  void _showNewNotificationSnackbar(NotificationModel notification) {
-    // You can show a snackbar when new notification arrives
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('🔔 ${notification.title}'),
-        duration: Duration(seconds: 3),
-      ),
-    );
-  }
-
-  // ============================================================================
-  // TEST WEBSOCKET CONNECTION
-  // ============================================================================
-
-  void _testWebSocketConnection() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userUid = prefs.getString('userUid');
-    final token = prefs.getString('jwt_token');
-
-    if (userUid != null && token != null) {
-      print("🧪 Testing WebSocket connection...");
-      _webSocketService.sendTestMessage();
-    } else {
-      print("❌ Cannot test WebSocket - user not logged in");
-    }
-  }
-
-  // ============================================================================
-  // TEST PUSH NOTIFICATION
-  // ============================================================================
-
-  void _testPushNotification() async {
-    final prefs = await SharedPreferences.getInstance();
-    final userUid = prefs.getString('userUid');
-
-    if (userUid == null) {
-      print("❌ Cannot test push - user not logged in");
-      return;
-    }
-
-    try {
-      final response = await gql.sendAuthenticatedQuery('''
-        mutation TestPushNotification {
-          testPushNotification
-        }
-      ''', {});
-
-      print("🧪 Push test response: $response");
-    } catch (e) {
-      print("❌ Push test failed: $e");
-    }
-  }
-
-  Future<bool> _hasValidToken() async {
-    try {
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('jwt_token');
-      final userUid = prefs.getString('userUid');
-
-      print('🔍 Checking token...');
-
-      if (token == null || token.isEmpty) {
-        print('❌ No token found');
-        return false;
-      }
-
-      final response = await gql.sendQuery(
-        validateTokenQuery,
-        {"token": token},
-      );
-
-      print("📡 Validate token response: $response");
-
-      final result = response['data']?['validateToken'];
-      final isValid = result?['data'] == true;
-
-      print(isValid ? '✅ Token valid' : '❌ Token invalid');
-
-      // ✅ INITIALIZE WEBSOCKET IF TOKEN IS VALID
-      if (isValid && userUid != null) {
-        print("🚀 Initializing WebSocket after token validation...");
-        _initializeWebSocket(userUid, token);
-      }
-
-      return isValid;
-    } catch (e) {
-      print("❌ Error validating token: $e");
-      return false;
-    }
-  }
-
-  @override
-  void dispose() {
-    _firebaseMessagingService.dispose();
-    _webSocketService.disconnect(); // DISCONNECT WEBSOCKET
-    super.dispose();
-  }
+class SmartIncidentApp extends StatelessWidget {
+  const SmartIncidentApp({Key? key}) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
     return MultiProvider(
       providers: [
-        ChangeNotifierProvider<NotificationsService>(
-          create: (_) => _notificationsService,
+        ChangeNotifierProvider(
+          create: (_) => ThemeProvider(),
         ),
-        // Add WebSocket service provider if needed
+        ChangeNotifierProvider(create: (_) => NotificationsService()),
       ],
-      child: MaterialApp(
-        title: 'Smart Incident App',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          primarySwatch: Colors.blue,
-          visualDensity: VisualDensity.adaptivePlatformDensity,
-        ),
-        initialRoute: '/',
-        routes: {
-          '/': (context) => SplashScreen(
-            hasValidToken: _hasValidToken,
-            testWebSocket: _testWebSocketConnection,
-            testPush: _testPushNotification,
-          ),
-          '/register': (context) => RegisterScreen(),
-          '/otp': (context) => OtpScreen(
-            phoneNumber: ModalRoute.of(context)?.settings.arguments as String? ?? '',
-          ),
-          '/dashboard': (context) => DashboardScreen(),
-          '/notifications': (context) => NotificationsScreen(),
-        },
-        onUnknownRoute: (settings) {
-          print('⚠️ Unknown route: ${settings.name}');
-          return MaterialPageRoute(
-            builder: (context) => RegisterScreen(),
+      child: Consumer<ThemeProvider>(
+        builder: (context, themeProvider, child) {
+          return MaterialApp(
+            title: 'Smart Incident App',
+            debugShowCheckedModeBanner: false,
+            theme: AppTheme.lightTheme,
+            darkTheme: AppTheme.darkTheme,
+            themeMode: themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+            home: const AuthWrapper(),
+            routes: {
+              '/dashboard': (context) => DashboardScreen(),
+              '/register': (context) => RegisterScreen(),
+              '/otp': (context) => OtpScreen(
+                phoneNumber: ModalRoute.of(context)?.settings.arguments as String? ?? '',
+              ),
+              '/notifications': (context) => NotificationsScreen(),
+            },
           );
         },
       ),
@@ -281,220 +64,174 @@ class _SmartIncidentAppState extends State<SmartIncidentApp> {
   }
 }
 
-// ============================================================================
-// SPLASH SCREEN SIMPLIFIED - NO IMAGES
-// ============================================================================
-
-class SplashScreen extends StatefulWidget {
-  final Future<bool> Function() hasValidToken;
-  final VoidCallback? testWebSocket;
-  final VoidCallback? testPush;
-
-  const SplashScreen({
-    Key? key,
-    required this.hasValidToken,
-    this.testWebSocket,
-    this.testPush,
-  }) : super(key: key);
+class AuthWrapper extends StatefulWidget {
+  const AuthWrapper({Key? key}) : super(key: key);
 
   @override
-  _SplashScreenState createState() => _SplashScreenState();
+  State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-class _SplashScreenState extends State<SplashScreen> {
-  String _statusMessage = 'Loading...';
-  bool _showDebugOptions = false;
+class _AuthWrapperState extends State<AuthWrapper> {
+  final GraphQLService gql = GraphQLService();
+  late FirebaseMessagingService _firebaseMessagingService;
+  late WebSocketNotificationsService _webSocketService;
+  bool _isChecking = true;
 
   @override
   void initState() {
     super.initState();
-    _checkAuthAndNavigate();
+    _firebaseMessagingService = FirebaseMessagingService();
+    _webSocketService = WebSocketNotificationsService();
+    _checkAuthAndInitialize();
   }
 
-  Future<void> _checkAuthAndNavigate() async {
-    try {
-      // Wait for services to initialize
-      await Future.delayed(Duration(milliseconds: 1500));
+  Future<void> _checkAuthAndInitialize() async {
+    final notificationsService = Provider.of<NotificationsService>(context, listen: false);
 
-      if (!mounted) return;
+    // Initialize Firebase Messaging
+    await _firebaseMessagingService.initialize(
+      context,
+      notificationsService: notificationsService,
+    );
 
-      setState(() => _statusMessage = 'Verifying authentication...');
+    // Check token validity
+    final hasValidToken = await _validateToken();
 
-      // Wait a bit more to ensure Firebase Messaging is ready
-      await Future.delayed(Duration(milliseconds: 500));
+    if (!mounted) return;
 
-      if (!mounted) return;
+    if (hasValidToken) {
+      // Fetch notifications once logged in
+      await notificationsService.fetchNotifications();
+      await notificationsService.fetchUnreadCount();
 
-      final isValid = await widget.hasValidToken();
+      // Get user credentials from SharedPreferences
+      final prefs = await SharedPreferences.getInstance();
+      var userUid = prefs.getString('userUid');
+      final token = prefs.getString('jwt_token');
 
-      if (!mounted) return;
+      print("🔍 userUid from prefs: $userUid");
+      print("🔍 token exists: ${token != null}");
 
-      if (isValid) {
-        print('🚀 Navigating to Dashboard...');
-        // Fetch initial notifications when user logs in
-        final notificationsService = Provider.of<NotificationsService>(context, listen: false);
-        await notificationsService.fetchNotifications();
+      if (userUid == null) {
+        print("⚠️ User UID not found, fetching from GraphQL...");
+        try {
+          const String meQuery = '''
+            query {
+              me {
+                data {
+                  uid
+                }
+              }
+            }
+          ''';
 
-        Navigator.of(context).pushReplacementNamed('/dashboard');
+          final response = await gql.sendAuthenticatedQuery(meQuery, {});
+          final user = response['data']?['me']?['data'];
+
+          if (user != null && user['uid'] != null) {
+            userUid = user['uid'];
+            await prefs.setString('userUid', userUid!);
+            print("✅ Saved user UID from GraphQL: $userUid");
+          } else {
+            print("❌ Could not get user UID from GraphQL response");
+          }
+        } catch (e) {
+          print("❌ Error fetching user UID: $e");
+        }
       } else {
-        print('🚀 Navigating to Register...');
-        Navigator.of(context).pushReplacementNamed('/register');
+        print("✅ User UID found: $userUid");
       }
-    } catch (e) {
-      print('❌ Auth check error: $e');
 
-      if (!mounted) return;
+      if (userUid != null && token != null) {
+        await _webSocketService.connect(
+          userUid,
+          token,
+          notificationsService: notificationsService,
+        );
+        print("✅ WebSocket connection initiated");
+      } else {
+        print("❌ Cannot connect WebSocket - missing userUid or token");
+        print("   userUid: $userUid");
+        print("   token: ${token != null ? 'exists' : 'null'}");
+      }
 
-      setState(() {
-        _statusMessage = 'Error. Tap to retry...';
-        _showDebugOptions = true;
-      });
+      Navigator.pushReplacementNamed(context, '/dashboard');
+    } else {
+      Navigator.pushReplacementNamed(context, '/register');
     }
+
+    setState(() => _isChecking = false);
   }
 
-  void _retryAuth() {
-    setState(() {
-      _statusMessage = 'Retrying...';
-      _showDebugOptions = false;
-    });
-    _checkAuthAndNavigate();
+  Future<bool> _validateToken() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('jwt_token');
+
+      if (token == null || token.isEmpty) {
+        print("❌ No token found");
+        return false;
+      }
+
+      final response = await gql.sendQuery(validateTokenQuery, {"token": token}).timeout(
+        const Duration(seconds: 8),
+        onTimeout: () => {'data': {'validateToken': {'data': false}}},
+      );
+
+      final isValid = response['data']?['validateToken']?['data'] == true;
+      return isValid;
+    } catch (e) {
+      print("❌ Token validation error: $e");
+      return false;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFF2E5BFF),
-      body: GestureDetector(
-        onTap: _retryAuth,
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              // APP ICON - USING FLUTTER ICON ONLY (No image assets)
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.black.withOpacity(0.3),
-                      blurRadius: 15,
-                      offset: Offset(0, 5),
-                    ),
-                  ],
-                ),
-                child: Icon(
-                  Icons.security_rounded, // Using Flutter built-in icon
-                  size: 40,
-                  color: Color(0xFF2E5BFF),
-                ),
+      backgroundColor: const Color(0xFF2E5BFF),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 90,
+              height: 90,
+              decoration: const BoxDecoration(
+                color: Colors.white,
+                shape: BoxShape.circle,
+                boxShadow: [
+                  BoxShadow(color: Colors.black26, blurRadius: 20, offset: Offset(0, 10))
+                ],
               ),
-              SizedBox(height: 30),
-
-              // APP NAME
-              Text(
-                'Smart Incident',
-                style: TextStyle(
-                  fontSize: 28,
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                ),
-              ),
-              SizedBox(height: 10),
-
-              // TAGLINE
-              Text(
-                'Report. Track. Stay Safe.',
-                style: TextStyle(
-                  fontSize: 14,
-                  color: Colors.white.withOpacity(0.8),
-                ),
-              ),
-              SizedBox(height: 50),
-
-              // LOADING INDICATOR
-              CircularProgressIndicator(
-                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                strokeWidth: 3,
-              ),
-              SizedBox(height: 20),
-
-              // STATUS MESSAGE
-              Text(
-                _statusMessage,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors.white.withOpacity(0.7),
-                ),
-              ),
-
-              // DEBUG OPTIONS
-              if (_showDebugOptions) ...[
-                SizedBox(height: 30),
-                Container(
-                  padding: EdgeInsets.all(16),
-                  decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        'Debug Options',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      SizedBox(height: 10),
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          ElevatedButton(
-                            onPressed: widget.testWebSocket,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.orange,
-                            ),
-                            child: Text(
-                              'Test WebSocket',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                          ),
-                          ElevatedButton(
-                            onPressed: widget.testPush,
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.green,
-                            ),
-                            child: Text(
-                              'Test Push',
-                              style: TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-              ],
+              child: const Icon(Icons.security_rounded, size: 50, color: Color(0xFF2E5BFF)),
+            ),
+            const SizedBox(height: 32),
+            const Text(
+              'Smart Incident',
+              style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
+            ),
+            const SizedBox(height: 12),
+            const Text(
+              'Report. Track. Stay Safe.',
+              style: TextStyle(fontSize: 16, color: Colors.white70),
+            ),
+            const SizedBox(height: 60),
+            if (_isChecking) ...[
+              const CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
+              const SizedBox(height: 20),
+              const Text('Loading...', style: TextStyle(color: Colors.white70)),
             ],
-          ),
+          ],
         ),
       ),
-
-      // DEBUG BUTTON
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          setState(() {
-            _showDebugOptions = !_showDebugOptions;
-          });
-        },
-        mini: true,
-        backgroundColor: Colors.red,
-        child: Icon(Icons.bug_report),
-        tooltip: 'Debug Options',
-      ),
     );
+  }
+
+  @override
+  void dispose() {
+    _firebaseMessagingService.dispose();
+    //_webSocketService.disconnect();
+    super.dispose();
   }
 }

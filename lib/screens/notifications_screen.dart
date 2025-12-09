@@ -5,6 +5,9 @@ import 'package:intl/intl.dart';
 import '../services/graphql_service.dart';
 import '../services/notifications_service.dart';
 import '../utils/graphql_query.dart';
+import 'dashbord_screen.dart';
+import 'incident_chat_screen.dart';
+import 'incident_details_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   @override
@@ -39,54 +42,94 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
     if (mounted) {
       switch (notification.type.toUpperCase()) {
         case 'INCIDENT_REPORTED':
-        case 'INCIDENT_ASSIGNED':
-        case 'INCIDENT_RESOLVED':
           if (notification.relatedEntityUid != null) {
-            Navigator.pushNamed(
-              context,
-              '/incident-details',
-              arguments: {
-                'incidentUid': notification.relatedEntityUid,
-              },
-            );
+            if (mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => IncidentDetailsScreen(
+                    incidentUid: notification.relatedEntityUid!,
+                  ),
+                ),
+              );
+            }
           }
           break;
-
+        case 'INCIDENT_ASSIGNED':
+          if (notification.relatedEntityUid != null) {
+            if (mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => IncidentDetailsScreen(
+                    incidentUid: notification.relatedEntityUid!,
+                  ),
+                ),
+              );
+            }
+          }
+          break;
+        case 'INCIDENT_RESOLVED':
+        if (notification.relatedEntityUid != null) {
+          if (mounted) {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => IncidentDetailsScreen(
+                  incidentUid: notification.relatedEntityUid!,
+                ),
+              ),
+            );
+          }
+        }
+        break;
         case 'CHAT_MESSAGE':
           if (notification.relatedEntityUid != null) {
-            final userInfo = await _getUserInfo();
-            _userRole = userInfo['role'];
-            if (_userRole == 'POLICE_OFFICER' || _userRole == 'STATION_ADMIN') {
-              Navigator.pushNamed(
+            final userUid = await _getCurrentUserUid();
+
+            if (userUid != null && userUid.isNotEmpty) {
+              await _notificationsService.markAllNotificationsAsRead(userUid);
+            }
+
+            if (mounted) {
+              Navigator.push(
                 context,
-                '/police-officer-chat',
-                arguments: {
-                  'chatUid': notification.relatedEntityUid,
-                },
-              );
-            } else {
-              Navigator.pushNamed(
-                context,
-                '/my-incident-chat',
-                arguments: {
-                  'chatUid': notification.relatedEntityUid,
-                },
+                MaterialPageRoute(
+                  builder: (context) => IncidentChatScreen(
+                    incidentUid: notification.relatedEntityUid!,
+                    incidentTitle: notification.title ?? 'Incident Chat',
+                    currentUserUid: userUid,
+                  ),
+                ),
               );
             }
           }
           break;
 
         case 'SHIFT_ASSIGNED':
-        case 'SHIFT_REASSIGNED':
           if (notification.relatedEntityUid != null) {
-            Navigator.pushNamed(
+            if (mounted) {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => DashboardScreen(
+                  ),
+                ),
+              );
+            }
+          }
+        case 'SHIFT_REASSIGNED':
+        if (notification.relatedEntityUid != null) {
+          if (mounted) {
+            Navigator.push(
               context,
-              '/shifts',
-              arguments: {
-                'shiftUid': notification.relatedEntityUid,
-              },
+              MaterialPageRoute(
+                builder: (context) => DashboardScreen(
+                ),
+              ),
             );
-          } else {
+          }
+        } else {
             Navigator.pushNamed(context, '/shifts');
           }
           break;
@@ -95,6 +138,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           break;
       }
     }
+  }
+
+  Future<String> _getCurrentUserUid() async {
+    final gql = GraphQLService();
+    final meResponse = await gql.sendAuthenticatedQuery(meQuery, {});
+    return meResponse['data']?['me']?['data']?['uid'];
   }
 
   void _showClearConfirmation() {
@@ -246,7 +295,12 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
           final filteredNotifications = _getFilteredNotifications();
 
           if (filteredNotifications.isEmpty) {
-            return _buildEmptyState();
+            return Column(
+              children: [
+                _buildFilterChips(),
+                Expanded(child: _buildEmptyState()),
+              ],
+            );
           }
 
           return Column(
@@ -352,19 +406,28 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
   // ============================================================================
 
   Widget _buildFilterChips() {
-    final filters = ['ALL', 'UNREAD', 'INCIDENTS', 'CHATS', 'SHIFTS'];
+    final filters = [
+      {'label': 'ALL NOTIFICATIONS', 'value': 'ALL'},
+      {'label': 'UNREAD', 'value': 'UNREAD'},
+      {'label': 'INCIDENTS', 'value': 'INCIDENTS'},
+      {'label': 'CHATS', 'value': 'CHATS'},
+      {'label': 'SHIFTS', 'value': 'SHIFTS'},
+    ];
 
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
       padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       child: Row(
         children: filters.map((filter) {
-          final isSelected = _selectedFilter == filter;
+          final label = filter['label']!;
+          final value = filter['value']!;
+          final isSelected = _selectedFilter == value;
+
           return Padding(
             padding: EdgeInsets.only(right: 8),
             child: FilterChip(
               label: Text(
-                filter,
+                label,
                 style: GoogleFonts.poppins(
                   fontSize: 12,
                   fontWeight: FontWeight.w500,
@@ -376,8 +439,9 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
               side: BorderSide(
                 color: isSelected ? Color(0xFF2E5BFF) : Color(0xFFE8EBF0),
               ),
-              onSelected: (selected) {
-                setState(() => _selectedFilter = filter);
+              selected: isSelected,
+              onSelected: (_) {
+                setState(() => _selectedFilter = value);
               },
             ),
           );

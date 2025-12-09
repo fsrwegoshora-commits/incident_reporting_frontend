@@ -3,10 +3,6 @@ import 'package:stomp_dart_client/stomp_dart_client.dart';
 import 'dart:convert';
 import 'notifications_service.dart';
 
-// ============================================================================
-// WEBSOCKET NOTIFICATIONS SERVICE - REAL-TIME (IMPROVED VERSION)
-// ============================================================================
-
 class WebSocketNotificationsService {
   static final WebSocketNotificationsService _instance =
   WebSocketNotificationsService._internal();
@@ -14,45 +10,52 @@ class WebSocketNotificationsService {
   factory WebSocketNotificationsService() => _instance;
   WebSocketNotificationsService._internal();
 
-  late StompClient _stompClient;
+  StompClient? _stompClient;
   bool _isConnected = false;
   String? _userId;
-  String? _token; // STORE TOKEN FOR RECONNECTION
+  String? _token;
   NotificationsService? _notificationsService;
 
-  // Callback when new notification arrives
-  Function(NotificationModel)? onNotificationReceived;
+  // ✅ NEW: Track reconnection attempts to prevent spam
+  int _reconnectAttempts = 0;
+  static const int _maxReconnectAttempts = 5;
 
-  // Callback when connection status changes
+  Function(NotificationModel)? onNotificationReceived;
   Function(bool)? onConnectionStatusChanged;
 
   // ============================================================================
-  // CONNECT TO WEBSOCKET (IMPROVED)
+  // CONNECT TO WEBSOCKET (WITH SOCKJS)
   // ============================================================================
 
   Future<void> connect(String userId, String token,
       {required NotificationsService notificationsService}) async {
     try {
       _userId = userId;
-      _token = token; // STORE TOKEN FOR RECONNECTION
+      _token = token;
       _notificationsService = notificationsService;
 
       print("🔌 Connecting to WebSocket for user: $userId");
 
-      // Close existing connection if any
-      if (_stompClient.connected) {
-        _stompClient.deactivate();
-        await Future.delayed(Duration(milliseconds: 500));
+      // Safe deactivate if already connected
+      if (_stompClient != null && _stompClient!.connected) {
+        print("🔄 Deactivating existing connection...");
+        try {
+          _stompClient!.deactivate();
+          await Future.delayed(Duration(milliseconds: 500));
+        } catch (e) {
+          print("⚠️ Error deactivating: $e");
+        }
       }
 
+      // ✅ Create new StompClient
       _stompClient = StompClient(
         config: StompConfig(
-          url: 'ws://10.29.242.163:8080/ws-notifications',
+          url: 'ws://10.11.171.163:8080/ws-notifications/websocket',
+
           onConnect: _onConnect,
           onDisconnect: _onDisconnect,
           onStompError: _onStompError,
 
-          // ADDED HEADERS FOR BETTER AUTHENTICATION
           stompConnectHeaders: {
             'Authorization': 'Bearer $token',
             'user-id': userId,
@@ -63,38 +66,40 @@ class WebSocketNotificationsService {
             'Authorization': 'Bearer $token',
           },
 
-          // 🔥 FIX: USE Duration OBJECTS INSTEAD OF INTEGERS
-          heartbeatOutgoing: Duration(seconds: 15), // 15 seconds
-          heartbeatIncoming: Duration(seconds: 15), // 15 seconds
-
-          // ADDED CONNECTION TIMEOUT
+          // ✅ IMPORTANT: Keep heartbeat alive
+          heartbeatOutgoing: Duration(seconds: 15),
+          heartbeatIncoming: Duration(seconds: 15),
           connectionTimeout: Duration(seconds: 10),
 
-          // IMPROVED ERROR HANDLING
           onWebSocketError: (error) {
             print("❌ WebSocket Error: $error");
             _scheduleReconnect();
           },
 
-          // ADDED: Callback before connection attempt
           beforeConnect: () async {
             print("🔄 Attempting WebSocket connection...");
             await Future.delayed(Duration(milliseconds: 100));
           },
 
-          // ADDED: Auto-reconnect
           reconnectDelay: Duration(seconds: 5),
 
-          // ADDED: STOMP debug messages
           onDebugMessage: (message) {
-            print("🔧 STOMP Debug: $message");
+            // ✅ Only print important messages to reduce log spam
+            if (message.contains('CONNECT') ||
+                message.contains('SUBSCRIBE') ||
+                message.contains('DISCONNECT')) {
+              print("🔧 STOMP: $message");
+            }
           },
         ),
       );
 
-      _stompClient.activate();
+      _stompClient!.activate();
+      print("✅ StompClient activated");
 
-      // SET CONNECTION TIMEOUT CHECK
+      // ✅ Reset reconnect attempts on successful activation
+      _reconnectAttempts = 0;
+
       _setupConnectionTimeout();
 
     } catch (e) {
@@ -106,60 +111,55 @@ class WebSocketNotificationsService {
   }
 
   // ============================================================================
-  // ON CONNECT (IMPROVED)
+  // ON CONNECT
   // ============================================================================
 
   void _onConnect(StompFrame connectFrame) {
-    print("✅ WebSocket Connected Successfully!");
-    print("🔧 Connection frame: ${connectFrame.headers}");
+    print("✅✅✅ WebSocket CONNECTED Successfully!");
+    print("🔧 Version: ${connectFrame.headers?['version']}");
 
     _isConnected = true;
+    _reconnectAttempts = 0; // ✅ Reset attempts
     onConnectionStatusChanged?.call(true);
 
-    // Subscribe to user notifications
     _subscribeToNotifications();
-
-    // SEND TEST MESSAGE TO VERIFY CONNECTION
     _sendConnectionTestMessage();
   }
 
   // ============================================================================
-  // SUBSCRIBE TO NOTIFICATIONS (IMPROVED)
+  // SUBSCRIBE TO NOTIFICATIONS
   // ============================================================================
 
   void _subscribeToNotifications() {
-    if (!_isConnected || _userId == null) {
-      print("⚠️ Cannot subscribe - not connected or userId missing");
+    if (!_isConnected || _userId == null || _stompClient == null) {
+      print("⚠️ Cannot subscribe - not ready");
       return;
     }
 
     try {
-      // Subscribe to user-specific queue (MOST IMPORTANT)
-      _stompClient.subscribe(
+      // User-specific queue
+      _stompClient!.subscribe(
         destination: '/user/$_userId/queue/notifications',
         callback: _onNotificationMessage,
-        headers: {'id': 'user-notifications-$_userId'}, // ADDED HEADER FOR TRACKING
+        headers: {'id': 'user-notifications-$_userId'},
       );
+      print("✅ Subscribed to /user/$_userId/queue/notifications");
 
-      print("✅ Subscribed to user notifications: /user/$_userId/queue/notifications");
-
-      // ALSO subscribe to user-specific topic (ALTERNATIVE PATH)
-      _stompClient.subscribe(
+      // User-specific topic
+      _stompClient!.subscribe(
         destination: '/topic/user/$_userId/notifications',
         callback: _onNotificationMessage,
         headers: {'id': 'user-topic-$_userId'},
       );
+      print("✅ Subscribed to /topic/user/$_userId/notifications");
 
-      print("✅ Subscribed to user topic: /topic/user/$_userId/notifications");
-
-      // Subscribe to broadcast notifications (OPTIONAL)
-      _stompClient.subscribe(
+      // Broadcast
+      _stompClient!.subscribe(
         destination: '/topic/notifications',
         callback: _onBroadcastNotification,
         headers: {'id': 'broadcast-notifications'},
       );
-
-      print("✅ Subscribed to broadcast notifications");
+      print("✅ Subscribed to /topic/notifications");
 
     } catch (e) {
       print("❌ Subscription error: $e");
@@ -167,274 +167,177 @@ class WebSocketNotificationsService {
   }
 
   // ============================================================================
-  // ON NOTIFICATION MESSAGE (IMPROVED)
+  // ON NOTIFICATION MESSAGE
   // ============================================================================
 
   void _onNotificationMessage(StompFrame frame) {
     try {
       if (frame.body == null) {
-        print("⚠️ Empty notification message received");
+        print("⚠️ Empty notification");
         return;
       }
 
-      print("📬 RAW WebSocket notification: ${frame.body}");
-      print("🔧 Headers: ${frame.headers}");
+      print("📬 Notification received");
 
-      // Parse JSON with better error handling
-      final dynamic jsonData;
-      try {
-        jsonData = jsonDecode(frame.body!);
-      } catch (e) {
-        print("❌ JSON parsing error: $e");
-        return;
-      }
+      final jsonData = jsonDecode(frame.body!);
+      final notification = NotificationModel.fromJson(jsonData);
 
-      // Handle different JSON formats
-      NotificationModel notification;
-      if (jsonData is Map<String, dynamic>) {
-        notification = NotificationModel.fromJson(jsonData);
-      } else {
-        print("❌ Unexpected notification format: ${jsonData.runtimeType}");
-        return;
-      }
+      print("✅ Parsed: ${notification.title}");
 
-      print("✅ Parsed notification: ${notification.title} (Type: ${notification.type})");
-
-      // Update local notifications list
       if (_notificationsService != null) {
         _notificationsService!.addNotification(notification);
-        print("🔔 Notification added to service: ${notification.title}");
-      } else {
-        print("⚠️ NotificationsService not available");
       }
 
-      // Call callback
       onNotificationReceived?.call(notification);
-
-      // SHOW DEBUG SNACKBAR (Optional - remove in production)
-      _showDebugSnackbar(notification);
 
     } catch (e) {
       print("❌ Error processing notification: $e");
-      print("❌ Stack trace: ${e.toString()}");
     }
   }
 
   // ============================================================================
-  // ON BROADCAST NOTIFICATION (IMPROVED)
+  // ON BROADCAST NOTIFICATION
   // ============================================================================
 
   void _onBroadcastNotification(StompFrame frame) {
     try {
-      if (frame.body == null) {
-        print("⚠️ Empty broadcast message");
-        return;
-      }
-
-      print("📢 Broadcast notification: ${frame.body}");
+      if (frame.body == null) return;
 
       final jsonData = jsonDecode(frame.body!);
       final notification = NotificationModel.fromJson(jsonData);
 
       if (_notificationsService != null) {
         _notificationsService!.addNotification(notification);
-        print("🔔 Broadcast notification added: ${notification.title}");
       }
 
       onNotificationReceived?.call(notification);
 
     } catch (e) {
-      print("❌ Error processing broadcast notification: $e");
+      print("❌ Broadcast error: $e");
     }
   }
 
   // ============================================================================
-  // ON DISCONNECT (IMPROVED WITH RECONNECTION)
+  // ON DISCONNECT
   // ============================================================================
 
   void _onDisconnect(StompFrame frame) {
     print("⚠️ WebSocket Disconnected");
-    print("🔧 Disconnect frame: ${frame.body}");
+    print("   Reason: ${frame.body ?? 'Unknown'}");
 
     _isConnected = false;
     onConnectionStatusChanged?.call(false);
 
-    // Auto-reconnect after delay
     _scheduleReconnect();
   }
 
   // ============================================================================
-  // ON STOMP ERROR (IMPROVED)
+  // ON STOMP ERROR
   // ============================================================================
 
   void _onStompError(StompFrame frame) {
     print("❌ STOMP Error: ${frame.body}");
-    print("🔧 Error headers: ${frame.headers}");
-
-    // Try to reconnect on error
     _scheduleReconnect();
   }
 
   // ============================================================================
-  // RECONNECTION LOGIC (NEW)
+  // RECONNECTION (✅ IMPROVED - Exponential backoff)
   // ============================================================================
 
   void _scheduleReconnect() {
-    print("🔄 Scheduling reconnection in 5 seconds...");
+    // ✅ Prevent infinite reconnect loop
+    if (_reconnectAttempts >= _maxReconnectAttempts) {
+      print("❌ Max reconnect attempts reached. Please restart app.");
+      return;
+    }
 
-    Future.delayed(Duration(seconds: 5), () {
+    _reconnectAttempts++;
+
+    // ✅ Exponential backoff: 5s, 10s, 20s, 40s, 80s
+    final delaySeconds = 5 * (1 << (_reconnectAttempts - 1));
+    print("🔄 Reconnect attempt $_reconnectAttempts/$_maxReconnectAttempts in ${delaySeconds}s...");
+
+    Future.delayed(Duration(seconds: delaySeconds), () {
       if (_userId != null && _token != null && _notificationsService != null) {
-        print("🔄 Attempting to reconnect WebSocket...");
+        print("🔄 Attempting reconnection...");
         connect(_userId!, _token!, notificationsService: _notificationsService!);
-      } else {
-        print("❌ Cannot reconnect - missing user ID, token, or service");
       }
     });
   }
 
   // ============================================================================
-  // CONNECTION TIMEOUT (NEW)
+  // CONNECTION TIMEOUT
   // ============================================================================
 
   void _setupConnectionTimeout() {
     Future.delayed(Duration(seconds: 15), () {
       if (!_isConnected) {
-        print("⏰ WebSocket connection timeout - server not responding");
+        print("⏰ Connection timeout - retrying");
         _scheduleReconnect();
       }
     });
   }
 
   // ============================================================================
-  // TEST MESSAGE (NEW)
+  // SEND TEST MESSAGE
   // ============================================================================
 
   void _sendConnectionTestMessage() {
-    if (!_isConnected) return;
+    if (!_isConnected || _stompClient == null) return;
 
     try {
-      _stompClient.send(
+      _stompClient!.send(
         destination: '/app/connection-test',
-        body: json.encode({
-          'message': 'Flutter client connected',
+        body: jsonEncode({
+          'message': 'Flutter connected',
           'userId': _userId,
-          'clientType': 'FLUTTER',
           'timestamp': DateTime.now().millisecondsSinceEpoch,
         }),
-        headers: {
-          'user-id': _userId!,
-          'content-type': 'application/json',
-        },
       );
-      print("✅ Connection test message sent");
+      print("✅ Test message sent");
     } catch (e) {
-      print("❌ Error sending test message: $e");
+      print("❌ Error sending test: $e");
     }
   }
-// ============================================================================
-// ADD THIS FUNCTION TO YOUR WebSocketNotificationsService CLASS
-// ============================================================================
 
   void sendTestMessage() {
-    if (!_isConnected) {
-      print("❌ Cannot send test - WebSocket not connected");
+    if (!_isConnected || _stompClient == null) {
+      print("❌ Not connected");
       return;
     }
 
     try {
-      _stompClient.send(
+      _stompClient!.send(
         destination: '/app/test',
-        body: json.encode({
+        body: jsonEncode({
           'message': 'Test from Flutter',
           'userId': _userId,
-          'timestamp': DateTime.now().millisecondsSinceEpoch,
         }),
       );
-      print("✅ Test message sent to WebSocket");
+      print("✅ Test sent");
     } catch (e) {
-      print("❌ Error sending test message: $e");
-    }
-  }
-  // ============================================================================
-  // SEND TEST NOTIFICATION (NEW - FOR DEBUGGING)
-  // ============================================================================
-
-  void sendTestNotification() {
-    if (!_isConnected) {
-      print("❌ Cannot send test - WebSocket not connected");
-      return;
-    }
-
-    try {
-      _stompClient.send(
-        destination: '/app/test-notification',
-        body: json.encode({
-          'userId': _userId,
-          'title': 'Test Notification',
-          'message': 'This is a test from Flutter',
-          'type': 'TEST',
-          'timestamp': DateTime.now().millisecondsSinceEpoch,
-        }),
-      );
-      print("✅ Test notification request sent");
-    } catch (e) {
-      print("❌ Error sending test notification: $e");
+      print("❌ Error: $e");
     }
   }
 
   // ============================================================================
-  // GET CONNECTION STATUS (NEW)
-  // ============================================================================
-
-  Map<String, dynamic> getConnectionStatus() {
-    return {
-      'connected': _isConnected,
-      'userId': _userId,
-      'stompConnected': _stompClient.connected,
-    };
-  }
-
-  // ============================================================================
-  // DISCONNECT (IMPROVED)
+  // DISCONNECT (SAFE)
   // ============================================================================
 
   void disconnect() {
     try {
-      if (_stompClient.connected) {
-        _stompClient.deactivate();
-        print("✅ WebSocket manually disconnected");
+      if (_stompClient != null && _stompClient!.connected) {
+        _stompClient!.deactivate();
+        print("✅ WebSocket disconnected gracefully");
       } else {
         print("ℹ️ WebSocket already disconnected");
       }
-      _isConnected = false;
-      onConnectionStatusChanged?.call(false);
     } catch (e) {
-      print("❌ Error disconnecting WebSocket: $e");
+      print("⚠️ Error during disconnect: $e");
     }
-  }
 
-  // ============================================================================
-  // DEBUG SNACKBAR (NEW - REMOVE IN PRODUCTION)
-  // ============================================================================
-
-  void _showDebugSnackbar(NotificationModel notification) {
-    // This is for debugging - shows a snackbar when notification arrives
-    // Remove this in production or make it configurable
-     try {
-    //   final context = _notificationsService?.context;
-    //   if (context != null) {
-    //     ScaffoldMessenger.of(context).showSnackBar(
-    //       SnackBar(
-    //         content: Text('🔔 ${notification.title}'),
-    //         duration: Duration(seconds: 3),
-    //         backgroundColor: Colors.green,
-    //       ),
-    //     );
-    //   }
-    print("🔔 DEBUG: Would show snackbar for: ${notification.title}");
-    } catch (e) {
-      // Ignore errors in snackbar (context might not be available)
-    }
+    _isConnected = false;
+    onConnectionStatusChanged?.call(false);
   }
 
   // ============================================================================
@@ -443,5 +346,6 @@ class WebSocketNotificationsService {
 
   bool get isConnected => _isConnected;
   String? get userId => _userId;
-  bool get stompConnected => _stompClient.connected;
+  bool get stompConnected => _stompClient?.connected ?? false;
+  int get reconnectAttempts => _reconnectAttempts;
 }

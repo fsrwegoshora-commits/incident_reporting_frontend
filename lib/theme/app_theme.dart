@@ -386,50 +386,440 @@ class AppTheme {
     }
   }
 
-  static ThemeData get lightTheme => ThemeData(
-    primarySwatch: Colors.blue,
-    primaryColor: primaryBlue,
-    scaffoldBackgroundColor: surfaceWhite,
-    cardColor: cardWhite,
-    dividerColor: dividerColor,
-    textTheme: TextTheme(
-      headlineLarge: headlineLarge,
-      headlineMedium: headlineMedium,
-      headlineSmall: headlineSmall,
-      titleLarge: titleLarge,
-      titleMedium: titleMedium,
-      titleSmall: titleSmall,
-      bodyLarge: bodyLarge,
-      bodyMedium: bodyMedium,
-      bodySmall: bodySmall,
-      labelLarge: labelLarge,
-      labelMedium: labelMedium,
-      labelSmall: labelSmall,
-    ),
-    appBarTheme: AppBarTheme(
-      backgroundColor: primaryBlue,
-      foregroundColor: cardWhite,
-      elevation: 0,
-      titleTextStyle: titleLarge.copyWith(color: cardWhite),
-    ),
-    elevatedButtonTheme: ElevatedButtonThemeData(
-      style: ElevatedButton.styleFrom(
-        backgroundColor: primaryBlue,
-        foregroundColor: cardWhite,
-        padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-        shape: RoundedRectangleBorder(borderRadius: buttonRadius),
-        textStyle: buttonTextMedium,
-      ),
-    ),
-    floatingActionButtonTheme: FloatingActionButtonThemeData(
-      backgroundColor: primaryBlue,
-      foregroundColor: cardWhite,
-    ),
-    bottomNavigationBarTheme: BottomNavigationBarThemeData(
-      selectedItemColor: primaryBlue,
-      unselectedItemColor: textSecondary,
-      backgroundColor: cardWhite,
-      elevation: 8,
-    ),
+  // ========== DARK THEME COLORS ==========
+  static const Color darkBackground = Color(0xFF121212);
+  static const Color darkSurface = Color(0xFF1E1E1E);
+  static const Color darkCard = Color(0xFF2D2D2D);
+  static const Color darkTextPrimary = Color(0xFFE0E0E0);
+  static const Color darkTextSecondary = Color(0xFFA0A0A0);
+  static const Color darkDivider = Color(0xFF333333);
+  static const Color darkBorder = Color(0xFF404040);
+
+  // ========== DARK THEME GRADIENTS ==========
+  static const LinearGradient darkPrimaryGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFF1976D2), Color(0xFF0D47A1)],
+  stops: [0.0, 1.0],
   );
+
+  static const LinearGradient darkCardGradient = LinearGradient(
+  begin: Alignment.topCenter,
+  end: Alignment.bottomCenter,
+  colors: [darkCard, darkSurface],
+  stops: [0.0, 1.0],
+  );
+
+  static const LinearGradient darkSuccessGradient = LinearGradient(
+  begin: Alignment.topLeft,
+  end: Alignment.bottomRight,
+  colors: [Color(0xFF388E3C), Color(0xFF1B5E20)],
+  stops: [0.0, 1.0],
+  );
+
+  // ========== DARK TEXT STYLES ==========
+  static const TextStyle darkHeadlineLarge = TextStyle(
+  fontSize: 32,
+  fontWeight: FontWeight.bold,
+  color: darkTextPrimary,
+  letterSpacing: -0.5,
+  height: 1.2,
+  );
+
+  static const TextStyle darkHeadlineMedium = TextStyle(
+  fontSize: 28,
+  fontWeight: FontWeight.bold,
+  color: darkTextPrimary,
+  letterSpacing: -0.25,
+  height: 1.3,
+  );
+
+  static const TextStyle darkHeadlineSmall = TextStyle(
+  fontSize: 24,
+  fontWeight: FontWeight.w600,
+  color: darkTextPrimary,
+  letterSpacing: 0.0,
+  height: 1.3,
+  );
+
+  static const TextStyle darkTitleLarge = TextStyle(
+  fontSize: 22,
+  fontWeight: FontWeight.w600,
+  color: darkTextPrimary,
+  letterSpacing: 0.0,
+  height: 1.4,
+  );
+
+  static const TextStyle darkTitleMedium = TextStyle(
+  fontSize: 18,
+  fontWeight: FontWeight.w500,
+  color: darkTextPrimary,
+  letterSpacing: 0.15,
+  height: 1.4,
+  );
+
+  static const TextStyle darkTitleSmall = TextStyle(
+  fontSize: 16,
+  fontWeight: FontWeight.w500,
+  color: darkTextPrimary,
+  letterSpacing: 0.1,
+  height: 1.4,
+  );
+
+  static const TextStyle darkBodyLarge = TextStyle(
+  fontSize: 16,
+  fontWeight: FontWeight.normal,
+  color: darkTextPrimary,
+  letterSpacing: 0.15,
+  height: 1.5,
+  );
+
+  static const TextStyle darkBodyMedium = TextStyle(
+  fontSize: 14,
+  fontWeight: FontWeight.normal,
+  color: darkTextSecondary,
+  letterSpacing: 0.25,
+  height: 1.4,
+  );
+
+  static const TextStyle darkBodySmall = TextStyle(
+  fontSize: 12,
+  fontWeight: FontWeight.normal,
+  color: darkTextSecondary,
+  letterSpacing: 0.4,
+  height: 1.3,
+  );
+
+  // ========== DARK SHADOWS ==========
+  static const BoxShadow darkLightShadow = BoxShadow(
+  color: Color(0x0AFFFFFF),
+  blurRadius: 4,
+  offset: Offset(0, 1),
+  spreadRadius: 0,
+  );
+
+  static const BoxShadow darkCardShadow = BoxShadow(
+  color: Color(0x1A000000),
+  blurRadius: 8,
+  offset: Offset(0, 2),
+  spreadRadius: 0,
+  );
+
+  static const BoxShadow darkElevatedShadow = BoxShadow(
+  color: Color(0x3F000000),
+  blurRadius: 16,
+  offset: Offset(0, 4),
+  spreadRadius: 0,
+  );
+
+  // ========== DARK DECORATIONS ==========
+  static BoxDecoration get darkPrimaryCardDecoration => BoxDecoration(
+  gradient: darkCardGradient,
+  borderRadius: cardRadius,
+  boxShadow: [darkCardShadow],
+  border: Border.all(color: darkBorder),
+  );
+
+  static BoxDecoration get darkElevatedCardDecoration => BoxDecoration(
+  color: darkCard,
+  borderRadius: cardRadius,
+  boxShadow: [darkElevatedShadow],
+  );
+
+  static BoxDecoration get darkPrimaryButtonDecoration => BoxDecoration(
+  gradient: darkPrimaryGradient,
+  borderRadius: buttonRadius,
+  boxShadow: [darkCardShadow],
+  );
+
+  // ========== DARK INPUT DECORATIONS ==========
+  static InputDecoration getDarkInputDecoration({
+  required String labelText,
+  String? hintText,
+  IconData? prefixIcon,
+  IconData? suffixIcon,
+  VoidCallback? onSuffixIconPressed,
+  }) {
+  return InputDecoration(
+  labelText: labelText,
+  hintText: hintText,
+  prefixIcon: prefixIcon != null ? Icon(prefixIcon, color: darkTextSecondary) : null,
+  suffixIcon: suffixIcon != null
+  ? IconButton(
+  icon: Icon(suffixIcon, color: darkTextSecondary),
+  onPressed: onSuffixIconPressed,
+  )
+      : null,
+  border: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: darkBorder),
+  ),
+  enabledBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: darkBorder),
+  ),
+  focusedBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: primaryBlueLight, width: 2),
+  ),
+  errorBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: errorRedLight, width: 2),
+  ),
+  filled: true,
+  fillColor: darkSurface,
+  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+  labelStyle: darkBodyMedium,
+  hintStyle: darkBodyMedium.copyWith(color: darkTextSecondary.withOpacity(0.6)),
+  );
+  }
+
+  // ========== THEME DATA GETTERS ==========
+  static ThemeData get lightTheme => ThemeData(
+  brightness: Brightness.light,
+  primaryColor: primaryBlue,
+  scaffoldBackgroundColor: surfaceWhite,
+  cardColor: cardWhite,
+  dividerColor: dividerColor,
+  canvasColor: surfaceWhite,
+  dialogBackgroundColor: cardWhite,
+  textTheme: TextTheme(
+  headlineLarge: headlineLarge,
+  headlineMedium: headlineMedium,
+  headlineSmall: headlineSmall,
+  titleLarge: titleLarge,
+  titleMedium: titleMedium,
+  titleSmall: titleSmall,
+  bodyLarge: bodyLarge,
+  bodyMedium: bodyMedium,
+  bodySmall: bodySmall,
+  labelLarge: labelLarge,
+  labelMedium: labelMedium,
+  labelSmall: labelSmall,
+  ),
+  appBarTheme: AppBarTheme(
+  backgroundColor: primaryBlue,
+  foregroundColor: cardWhite,
+  elevation: 0,
+  titleTextStyle: titleLarge.copyWith(color: cardWhite),
+  iconTheme: IconThemeData(color: cardWhite),
+  ),
+  elevatedButtonTheme: ElevatedButtonThemeData(
+  style: ElevatedButton.styleFrom(
+  backgroundColor: primaryBlue,
+  foregroundColor: cardWhite,
+  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+  shape: RoundedRectangleBorder(borderRadius: buttonRadius),
+  textStyle: buttonTextMedium,
+  ),
+  ),
+  textButtonTheme: TextButtonThemeData(
+  style: TextButton.styleFrom(
+  foregroundColor: primaryBlue,
+  textStyle: bodyMedium,
+  ),
+  ),
+  outlinedButtonTheme: OutlinedButtonThemeData(
+  style: OutlinedButton.styleFrom(
+  foregroundColor: primaryBlue,
+  side: BorderSide(color: primaryBlue),
+  shape: RoundedRectangleBorder(borderRadius: buttonRadius),
+  textStyle: bodyMedium,
+  ),
+  ),
+  floatingActionButtonTheme: FloatingActionButtonThemeData(
+  backgroundColor: primaryBlue,
+  foregroundColor: cardWhite,
+  ),
+  bottomNavigationBarTheme: BottomNavigationBarThemeData(
+  selectedItemColor: primaryBlue,
+  unselectedItemColor: textSecondary,
+  backgroundColor: cardWhite,
+  elevation: 8,
+  ),
+  inputDecorationTheme: InputDecorationTheme(
+  filled: true,
+  fillColor: surfaceWhite,
+  border: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: borderColor),
+  ),
+  enabledBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: borderColor),
+  ),
+  focusedBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: primaryBlue, width: 2),
+  ),
+  ),
+  colorScheme: ColorScheme.light(
+  primary: primaryBlue,
+  secondary: accentOrange,
+  surface: surfaceWhite,
+  background: surfaceGrey,
+  onPrimary: cardWhite,
+  onSecondary: cardWhite,
+  onSurface: textPrimary,
+  onBackground: textPrimary,
+  ),
+  );
+
+  static ThemeData get darkTheme => ThemeData(
+  brightness: Brightness.dark,
+  primaryColor: primaryBlueLight,
+  scaffoldBackgroundColor: darkBackground,
+  cardColor: darkCard,
+  dividerColor: darkDivider,
+  canvasColor: darkSurface,
+  dialogBackgroundColor: darkCard,
+  textTheme: TextTheme(
+  headlineLarge: darkHeadlineLarge,
+  headlineMedium: darkHeadlineMedium,
+  headlineSmall: darkHeadlineSmall,
+  titleLarge: darkTitleLarge,
+  titleMedium: darkTitleMedium,
+  titleSmall: darkTitleSmall,
+  bodyLarge: darkBodyLarge,
+  bodyMedium: darkBodyMedium,
+  bodySmall: darkBodySmall,
+  labelLarge: labelLarge.copyWith(color: darkTextPrimary),
+  labelMedium: labelMedium.copyWith(color: darkTextSecondary),
+  labelSmall: labelSmall.copyWith(color: darkTextSecondary),
+  ),
+  appBarTheme: AppBarTheme(
+  backgroundColor: darkSurface,
+  foregroundColor: darkTextPrimary,
+  elevation: 0,
+  titleTextStyle: darkTitleLarge,
+  iconTheme: IconThemeData(color: darkTextPrimary),
+  ),
+  elevatedButtonTheme: ElevatedButtonThemeData(
+  style: ElevatedButton.styleFrom(
+  backgroundColor: primaryBlueLight,
+  foregroundColor: darkTextPrimary,
+  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+  shape: RoundedRectangleBorder(borderRadius: buttonRadius),
+  textStyle: buttonTextMedium.copyWith(color: darkTextPrimary),
+  ),
+  ),
+  textButtonTheme: TextButtonThemeData(
+  style: TextButton.styleFrom(
+  foregroundColor: primaryBlueLight,
+  textStyle: darkBodyMedium,
+  ),
+  ),
+  outlinedButtonTheme: OutlinedButtonThemeData(
+  style: OutlinedButton.styleFrom(
+  foregroundColor: primaryBlueLight,
+  side: BorderSide(color: primaryBlueLight),
+  shape: RoundedRectangleBorder(borderRadius: buttonRadius),
+  textStyle: darkBodyMedium,
+  ),
+  ),
+  floatingActionButtonTheme: FloatingActionButtonThemeData(
+  backgroundColor: primaryBlueLight,
+  foregroundColor: darkTextPrimary,
+  ),
+  bottomNavigationBarTheme: BottomNavigationBarThemeData(
+  selectedItemColor: primaryBlueLight,
+  unselectedItemColor: darkTextSecondary,
+  backgroundColor: darkSurface,
+  elevation: 8,
+  ),
+  inputDecorationTheme: InputDecorationTheme(
+  filled: true,
+  fillColor: darkSurface,
+  border: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: darkBorder),
+  ),
+  enabledBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: darkBorder),
+  ),
+  focusedBorder: OutlineInputBorder(
+  borderRadius: buttonRadius,
+  borderSide: BorderSide(color: primaryBlueLight, width: 2),
+  ),
+  ),
+  colorScheme: ColorScheme.dark(
+  primary: primaryBlueLight,
+  secondary: accentOrangeLight,
+  surface: darkSurface,
+  background: darkBackground,
+  onPrimary: darkTextPrimary,
+  onSecondary: darkTextPrimary,
+  onSurface: darkTextPrimary,
+  onBackground: darkTextPrimary,
+  ),
+  );
+
+  // ========== THEME AWARE METHODS ==========
+  static Color getBackgroundColor(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkBackground
+      : surfaceWhite;
+  }
+
+  static Color getSurfaceColor(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkSurface
+      : surfaceWhite;
+  }
+
+  static Color getCardColor(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkCard
+      : cardWhite;
+  }
+
+  static Color getTextPrimaryColor(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkTextPrimary
+      : textPrimary;
+  }
+
+  static Color getTextSecondaryColor(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkTextSecondary
+      : textSecondary;
+  }
+
+  static BoxDecoration getCardDecoration(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkPrimaryCardDecoration
+      : primaryCardDecoration;
+  }
+
+  static BoxDecoration getElevatedCardDecoration(BuildContext context) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? darkElevatedCardDecoration
+      : elevatedCardDecoration;
+  }
+
+  static InputDecoration getAdaptiveInputDecoration({
+  required BuildContext context,
+  required String labelText,
+  String? hintText,
+  IconData? prefixIcon,
+  IconData? suffixIcon,
+  VoidCallback? onSuffixIconPressed,
+  }) {
+  return Theme.of(context).brightness == Brightness.dark
+  ? getDarkInputDecoration(
+  labelText: labelText,
+  hintText: hintText,
+  prefixIcon: prefixIcon,
+  suffixIcon: suffixIcon,
+  onSuffixIconPressed: onSuffixIconPressed,
+  )
+      : getInputDecoration(
+  labelText: labelText,
+  hintText: hintText,
+  prefixIcon: prefixIcon,
+  suffixIcon: suffixIcon,
+  onSuffixIconPressed: onSuffixIconPressed,
+  );
+  }
 }

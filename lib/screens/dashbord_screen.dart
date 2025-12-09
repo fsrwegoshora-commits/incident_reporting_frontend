@@ -8,6 +8,7 @@ import 'package:provider/provider.dart';
 import 'package:incident_reporting_frontend/screens/register_screen.dart';
 import 'package:incident_reporting_frontend/screens/report_incident_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../providers/theme_provider.dart';
 import '../services/graphql_service.dart';
 import '../services/notifications_service.dart';
 import '../utils/auth_utils.dart';
@@ -29,6 +30,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> with TickerProviderStateMixin {
+  DateTime? _currentBackPressTime;
 
   // ============================================================================
   // STATE VARIABLES
@@ -80,11 +82,27 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     _initializeAnimations();
     _loadUserData();
 
-    // Setup notifications after first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _setupNotifications();
+      final notificationsService = Provider.of<NotificationsService>(context, listen: false);
+      notificationsService.fetchNotifications();
+      notificationsService.fetchUnreadCount();
+
+      // Auto refresh every 30 seconds
+      Timer.periodic(Duration(seconds: 30), (_) {
+        if (mounted) {
+          notificationsService.fetchUnreadCount();
+        }
+      });
     });
   }
+
+  // void _toggleTheme() {
+  //   final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
+  //   themeProvider.toggleTheme();
+  //   setState(() {
+  //     _isDarkMode = !_isDarkMode;
+  //   });
+  // }
 
   @override
   void dispose() {
@@ -295,6 +313,30 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     }
   }
 
+  Future<bool> _onWillPop() async {
+    DateTime now = DateTime.now();
+
+    // Check if this is the first time back button is pressed
+    if (_currentBackPressTime == null ||
+        now.difference(_currentBackPressTime!) > Duration(seconds: 2)) {
+
+      _currentBackPressTime = now;
+
+      // Show snackbar message
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Press back again to exit app'),
+          duration: Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+
+      return false; // Don't exit
+    }
+
+    // If pressed twice within 2 seconds, exit app
+    return true;
+  }
   Future<void> _fetchNearbyPoliceStations(double latitude, double longitude) async {
     try {
       final gql = GraphQLService();
@@ -399,7 +441,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Future<void> _logout() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    Navigator.pushReplacementNamed(context, '/');
+
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(builder: (context) => RegisterScreen()),
+    );
   }
 
   void _openStationIncidents() {
@@ -456,7 +501,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 style: GoogleFonts.poppins(
                   fontSize: 22,
                   fontWeight: FontWeight.w700,
-                  color: Color(0xFF1A1F36),
+                  color: Theme.of(context).textTheme.bodyMedium?.color,
                 ),
               ),
               SizedBox(height: 12),
@@ -1123,54 +1168,64 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Widget build(BuildContext context) {
     if (_isLoading) return _buildLoadingScreen();
 
-    return Scaffold(
-      key: _scaffoldKey,
-      backgroundColor: Color(0xFFF5F7FA),
-      drawer: Drawer(
-        child: _buildProfileDrawer(),
-      ),
-      body: SafeArea(
-        child: RefreshIndicator(
-          onRefresh: _loadUserData,
-          child: Stack(
-            children: [
-              SingleChildScrollView(
-                physics: AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-                child: FadeTransition(
-                  opacity: _fadeAnimation,
-                  // Update build method
+    return WillPopScope(
+      onWillPop: _onWillPop,
+      child: Scaffold(
+        key: _scaffoldKey,
+        backgroundColor: Theme.of(context).scaffoldBackgroundColor,
+
+        drawer: Drawer(
+          child: _buildProfileDrawer(),
+        ),
+
+        body: SafeArea(
+          child: RefreshIndicator(
+            onRefresh: _loadUserData,
+            child: Stack(
+              children: [
+                SingleChildScrollView(
+                  physics: AlwaysScrollableScrollPhysics(
+                    parent: BouncingScrollPhysics(),
+                  ),
+                  child: FadeTransition(
+                    opacity: _fadeAnimation,
+                    child: Column(
+                      children: [
+                        SizedBox(height: 280),
+
+                        if (_userRole == "POLICE_OFFICER")
+                          _buildShiftsSection()
+                        else if (_userRole == "STATION_ADMIN" || _userRole == "ROOT")
+                          _buildAdminSection()
+                        else if (_userRole == "CITIZEN")
+                            _buildCitizenContent(),
+
+                        SizedBox(height: 150),
+                      ],
+                    ),
+                  ),
+                ),
+
+                Positioned(
+                  top: 0,
+                  left: 0,
+                  right: 0,
                   child: Column(
                     children: [
-                      SizedBox(height: 280),
-                      if (_userRole == "POLICE_OFFICER")
-                        _buildShiftsSection()
-                      else if (_userRole == "STATION_ADMIN" || _userRole == "ROOT")
-                        _buildAdminSection()
-                      else if (_userRole == "CITIZEN")
-                          _buildCitizenContent(),
-                      SizedBox(height: 150),
+                      _buildHeader(),
+                      _buildBalanceCard(),
                     ],
                   ),
                 ),
-              ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: Column(
-                  children: [
-                    _buildHeader(),
-                    _buildBalanceCard(),
-                  ],
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
+
+        bottomNavigationBar: _buildModernBottomNav(),
+        floatingActionButton: _buildEmergencyButton(),
+        floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       ),
-      bottomNavigationBar: _buildModernBottomNav(),
-      floatingActionButton: _buildEmergencyButton(),
-      floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
     );
   }
 
@@ -1183,6 +1238,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       padding: EdgeInsets.fromLTRB(20, 16, 20, 24),
       child: Row(
         children: [
+          // Profile Avatar
           GestureDetector(
             onTap: _openProfile,
             child: Container(
@@ -1198,6 +1254,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ),
           ),
           SizedBox(width: 12),
+
+          // User Info
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1207,7 +1265,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   style: GoogleFonts.poppins(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
-                    color: Color(0xFF1A1F36),
+                    color: Theme.of(context).textTheme.headlineMedium?.color,
                   ),
                 ),
                 if (_userRole == "POLICE_OFFICER" && _rank != null)
@@ -1230,6 +1288,36 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               ],
             ),
           ),
+
+          // Theme Toggle - FIXED!
+          Consumer<ThemeProvider>(
+            builder: (context, themeProvider, child) {
+              return GestureDetector(
+                onTap: () {
+                  themeProvider.toggleTheme(); // Hii pekee inatosha!
+                },
+                child: Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surface,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: Theme.of(context).dividerColor),
+                  ),
+                  child: Icon(
+                    themeProvider.isDarkMode
+                        ? Icons.light_mode_rounded
+                        : Icons.dark_mode_rounded,
+                    color: Theme.of(context).colorScheme.primary,
+                    size: 20,
+                  ),
+                ),
+              );
+            },
+          ),
+          SizedBox(width: 12),
+
+          // Status Indicator
           Container(
             padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
@@ -1260,68 +1348,65 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ),
           ),
           SizedBox(width: 16),
-          // Notification Icon with Badge
-          Stack(
-            children: [
-              // Notification bell icon
-              GestureDetector(
-                onTap: _openNotifications,
-                child: Container(
-                  width: 40,
-                  height: 40,
-                  decoration: BoxDecoration(
-                    color: Color(0xFF2E5BFF).withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(
-                    Icons.notifications_rounded,
-                    color: Color(0xFF2E5BFF),
-                    size: 20,
-                  ),
-                ),
-              ),
 
-              // Unread badge
-              Consumer<NotificationsService>(
-                builder: (context, service, _) {
-                  return service.unreadCount > 0
-                      ? Positioned(
-                          right: 0,
-                          top: 0,
-                          child: Container(
-                            padding: EdgeInsets.all(4),
-                            decoration: BoxDecoration(
-                              color: Color(0xFFFF6B6B),
-                              shape: BoxShape.circle,
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Color(0xFFFF6B6B).withOpacity(0.4),
-                                  blurRadius: 8,
-                                  spreadRadius: 2,
-                                ),
-                              ],
+          // Notification Icon + Badge - PERFECT!
+          Consumer<NotificationsService>(
+            builder: (context, service, child) {
+              return Stack(
+                children: [
+                  GestureDetector(
+                    onTap: _openNotifications,
+                    child: Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.notifications_rounded,
+                        color: Theme.of(context).colorScheme.primary,
+                        size: 20,
+                      ),
+                    ),
+                  ),
+                  if (service.unreadCount > 0)
+                    Positioned(
+                      right: 0,
+                      top: 0,
+                      child: Container(
+                        padding: EdgeInsets.all(4),
+                        constraints: BoxConstraints(minWidth: 18, minHeight: 18),
+                        decoration: BoxDecoration(
+                          color: Color(0xFFFF6B6B),
+                          shape: BoxShape.circle,
+                          boxShadow: [
+                            BoxShadow(
+                              color: Color(0xFFFF6B6B).withOpacity(0.4),
+                              blurRadius: 8,
+                              spreadRadius: 2,
                             ),
-                            child: Text(
-                              service.unreadCount > 99 ? '99+' : '${service.unreadCount}',
-                              style: GoogleFonts.poppins(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w700,
-                                color: Colors.white,
-                              ),
-                              textAlign: TextAlign.center,
-                            ),
+                          ],
+                        ),
+                        child: Text(
+                          service.unreadCount > 99 ? '99+' : '${service.unreadCount}',
+                          style: GoogleFonts.poppins(
+                            fontSize: 9,
+                            fontWeight: FontWeight.bold,
+                            color: Colors.white,
                           ),
-                        )
-                      : SizedBox.shrink();
-                },
-              ),
-            ],
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
           ),
         ],
       ),
     );
   }
-
   // ============================================================================
   // UI COMPONENTS - Balance Card
   // ============================================================================
@@ -2265,7 +2350,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Widget _buildModernBottomNav() {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: Theme.of(context).bottomNavigationBarTheme.backgroundColor
+            ?? Theme.of(context).cardColor,
         boxShadow: [
           BoxShadow(
             color: Color(0xFF2E5BFF).withOpacity(0.08),
@@ -2296,12 +2382,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   );
                 },
               ),
-              SizedBox(width: 64), // Space for FAB
+              SizedBox(width: 64),
               _buildBottomNavIcon(
                 icon: Icons.forum_rounded,
                 label: 'Chats',
                 onTap: () {
-                  // Same as Reports for now
                   Navigator.push(
                     context,
                     MaterialPageRoute(builder: (_) => MyIncidentsScreen()),
@@ -2319,6 +2404,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       ),
     );
   }
+
   Widget _buildBottomNavIcon({
     required IconData icon,
     required String label,
@@ -2336,16 +2422,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             Icon(
               icon,
               size: 24,
-              color: Color(0xFF1A3A6F),
+              color: Theme.of(context).iconTheme.color,
             ),
             SizedBox(height: 4),
             Text(
               label,
-              style: GoogleFonts.poppins(
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
                 fontSize: 10,
                 fontWeight: FontWeight.w500,
-                color: Color(0xFF1A3A6F),
-                letterSpacing: -0.2,
               ),
               maxLines: 1,
               overflow: TextOverflow.clip,
@@ -2410,7 +2494,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-              colors: [Colors.white, Color(0xFFF8F9FC)],
+                colors: [
+                  Theme.of(context).cardColor,
+                  Theme.of(context).scaffoldBackgroundColor
+                ]
             ),
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
@@ -2592,7 +2679,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           maxHeight: MediaQuery.of(context).size.height * 0.8,
         ),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: Theme.of(context).cardColor,
           borderRadius: BorderRadius.circular(24),
         ),
         child: FutureBuilder<void>(
@@ -3288,7 +3375,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                               style: GoogleFonts.poppins(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w600,
-                                color: Colors.white,
+                                color: Theme.of(context).cardColor,
                               ),
                             ),
                           ],
@@ -3570,7 +3657,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
   Widget _buildLoadingScreen() {
     return Scaffold(
-      backgroundColor: Color(0xFFF5F7FA),
+      backgroundColor: Theme.of(context).scaffoldBackgroundColor,
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -3598,7 +3685,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               style: GoogleFonts.poppins(
                 fontSize: 16,
                 fontWeight: FontWeight.w600,
-                color: Color(0xFF1A1F36),
+                color: Theme.of(context).textTheme.bodyMedium?.color,
               ),
             ),
           ],
