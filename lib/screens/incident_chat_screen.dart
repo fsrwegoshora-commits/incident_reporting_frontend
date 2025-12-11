@@ -3,15 +3,16 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:incident_reporting_frontend/screens/video_player_screen.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_view/photo_view.dart';
 import 'dart:io';
 import 'dart:async';
 
+import '../services/config_service.dart';
 import '../services/graphql_service.dart';
 import '../services/media_download_service.dart';
 import '../services/media_service.dart';
+import '../services/media_url_converter.dart';
 import '../services/voice_recorder_service.dart';
 import '../utils/graphql_query.dart';
 import '../theme/app_theme.dart';
@@ -40,6 +41,8 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   final _audioPlayer = AudioPlayer();
 
   // Initialize services
+  late  ConfigService _config;
+  late MediaUrlConverter _mediaUrlConverter;
   late GraphQLService _gqlService;
   late MediaService _mediaService;
   late VoiceRecorderService _voiceRecorder;
@@ -65,6 +68,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   void initState() {
     super.initState();
     _initializeServices();
+    _mediaUrlConverter = MediaUrlConverter();
     _loadMessages();
 
     // Auto-refresh every 5 seconds
@@ -85,6 +89,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
   }
 
   void _initializeServices() {
+    _config = ConfigService();
     _gqlService = GraphQLService();
     _mediaService = MediaService(_gqlService);
     _voiceRecorder = VoiceRecorderService();
@@ -121,9 +126,16 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
         return;
       }
 
-      final messages = (result['data'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
+      var messages = (result['data'] as List<dynamic>? ?? []).cast<Map<String, dynamic>>();
 
-      // TUMIA HAPA: Angalia kama kuna mabadiliko
+      // ✅ CONVERT OLD URLS
+      messages = messages.map((msg) {
+        if (msg['mediaUrl'] != null) {
+          msg['mediaUrl'] = _mediaUrlConverter.convertMediaUrl(msg['mediaUrl']);
+        }
+        return msg;
+      }).toList();
+
       final hasNewMessages = _hasNewMessages(messages);
 
       setState(() {
@@ -345,8 +357,9 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     try {
       String fullMediaUrl = mediaUrl;
       if (!mediaUrl.startsWith('http')) {
-        fullMediaUrl = 'http://10.11.171.163:8080$mediaUrl';
+        fullMediaUrl = '${_config.mediaUrlPrefix}$mediaUrl';
       }
+
 
       // Prepare the complete message DTO
       final chatMessageDto = {
@@ -1951,8 +1964,9 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     // Convert to full URL if needed
     String fullVideoUrl = videoUrl;
     if (!videoUrl.startsWith('http')) {
-      fullVideoUrl = 'http://10.11.171.163:8080$videoUrl';
+      fullVideoUrl = '${_config.mediaUrlPrefix}$videoUrl';
     }
+
 
     Navigator.push(
       context,
@@ -2249,7 +2263,7 @@ class _IncidentChatScreenState extends State<IncidentChatScreen> {
     // Convert to full URL if needed
     String fullVideoUrl = videoUrl;
     if (!videoUrl.startsWith('http')) {
-      fullVideoUrl = 'http://10.11.171.163:8080$videoUrl';
+      fullVideoUrl = '${_config.mediaUrlPrefix}$videoUrl';
     }
 
     Navigator.push(

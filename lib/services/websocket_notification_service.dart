@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:stomp_dart_client/stomp_dart_client.dart';
 import 'dart:convert';
+import 'config_service.dart';
 import 'notifications_service.dart';
 
 class WebSocketNotificationsService {
@@ -9,6 +10,8 @@ class WebSocketNotificationsService {
 
   factory WebSocketNotificationsService() => _instance;
   WebSocketNotificationsService._internal();
+
+  final ConfigService _config = ConfigService();
 
   StompClient? _stompClient;
   bool _isConnected = false;
@@ -20,6 +23,8 @@ class WebSocketNotificationsService {
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 5;
 
+  String get wsUrl => _config.wsEndpoint;
+
   Function(NotificationModel)? onNotificationReceived;
   Function(bool)? onConnectionStatusChanged;
 
@@ -29,86 +34,45 @@ class WebSocketNotificationsService {
 
   Future<void> connect(String userId, String token,
       {required NotificationsService notificationsService}) async {
-    try {
-      _userId = userId;
-      _token = token;
-      _notificationsService = notificationsService;
 
-      print("🔌 Connecting to WebSocket for user: $userId");
-
-      // Safe deactivate if already connected
-      if (_stompClient != null && _stompClient!.connected) {
-        print("🔄 Deactivating existing connection...");
-        try {
-          _stompClient!.deactivate();
-          await Future.delayed(Duration(milliseconds: 500));
-        } catch (e) {
-          print("⚠️ Error deactivating: $e");
-        }
-      }
-
-      // ✅ Create new StompClient
-      _stompClient = StompClient(
-        config: StompConfig(
-          url: 'ws://10.11.171.163:8080/ws-notifications/websocket',
-
-          onConnect: _onConnect,
-          onDisconnect: _onDisconnect,
-          onStompError: _onStompError,
-
-          stompConnectHeaders: {
-            'Authorization': 'Bearer $token',
-            'user-id': userId,
-            'client-type': 'FLUTTER',
-          },
-
-          webSocketConnectHeaders: {
-            'Authorization': 'Bearer $token',
-          },
-
-          // ✅ IMPORTANT: Keep heartbeat alive
-          heartbeatOutgoing: Duration(seconds: 15),
-          heartbeatIncoming: Duration(seconds: 15),
-          connectionTimeout: Duration(seconds: 10),
-
-          onWebSocketError: (error) {
-            print("❌ WebSocket Error: $error");
-            _scheduleReconnect();
-          },
-
-          beforeConnect: () async {
-            print("🔄 Attempting WebSocket connection...");
-            await Future.delayed(Duration(milliseconds: 100));
-          },
-
-          reconnectDelay: Duration(seconds: 5),
-
-          onDebugMessage: (message) {
-            // ✅ Only print important messages to reduce log spam
-            if (message.contains('CONNECT') ||
-                message.contains('SUBSCRIBE') ||
-                message.contains('DISCONNECT')) {
-              print("🔧 STOMP: $message");
-            }
-          },
-        ),
-      );
-
-      _stompClient!.activate();
-      print("✅ StompClient activated");
-
-      // ✅ Reset reconnect attempts on successful activation
-      _reconnectAttempts = 0;
-
-      _setupConnectionTimeout();
-
-    } catch (e) {
-      print("❌ WebSocket connection error: $e");
-      _isConnected = false;
-      onConnectionStatusChanged?.call(false);
-      _scheduleReconnect();
+    if (_isConnected || (_stompClient?.connected ?? false)) {
+      print("⚠️ Already connected - skipping duplicate connect()");
+      return;
     }
+
+    print("🔌 Connecting WebSocket...");
+
+    _userId = userId;
+    _token = token;
+    _notificationsService = notificationsService;
+
+    _stompClient = StompClient(
+      config: StompConfig(
+        url: wsUrl,
+        onConnect: _onConnect,
+        onDisconnect: _onDisconnect,
+        onStompError: _onStompError,
+        webSocketConnectHeaders: {'Authorization': 'Bearer $token'},
+        stompConnectHeaders: {'Authorization': 'Bearer $token'},
+        heartbeatOutgoing: Duration(seconds: 15),
+        heartbeatIncoming: Duration(seconds: 15),
+
+        beforeConnect: () async {
+          print("🔄 Preparing connection...");
+        },
+
+        onWebSocketError: (error) {
+          print("❌ WS ERROR: $error");
+          if (!_isConnected) _scheduleReconnect();
+        },
+
+        reconnectDelay: Duration(seconds: 5),
+      ),
+    );
+
+    _stompClient!.activate();
   }
+
 
   // ============================================================================
   // ON CONNECT

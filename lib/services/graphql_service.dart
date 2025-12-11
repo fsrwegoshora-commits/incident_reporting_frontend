@@ -2,9 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'config_service.dart';
 
 class GraphQLService {
-  final String endpoint = 'http://10.11.171.163:8080/graphql';
+  final ConfigService _config = ConfigService();
+  String get endpoint => _config.graphqlEndpoint;
+
 
   /// 🔁 Send a GraphQL mutation with optional token
   Future<Map<String, dynamic>> sendMutation(

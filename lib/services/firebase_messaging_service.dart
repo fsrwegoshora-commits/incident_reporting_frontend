@@ -131,52 +131,45 @@ class FirebaseMessagingService {
   // ============================================================================
 
   Future<void> _initializeLocalNotifications() async {
-    try {
-      // Android setup
-      const AndroidInitializationSettings androidSettings = AndroidInitializationSettings(
-        '@mipmap/ic_launcher',
-      );
+    const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
 
-      // iOS setup
-      const DarwinInitializationSettings iosSettings = DarwinInitializationSettings(
-        requestAlertPermission: true,
-        requestBadgePermission: true,
-        requestSoundPermission: true,
-      );
+    const iosSettings = DarwinInitializationSettings(
+      requestAlertPermission: true,
+      requestBadgePermission: true,
+      requestSoundPermission: true,
+    );
 
-      const InitializationSettings initSettings = InitializationSettings(
-        android: androidSettings,
-        iOS: iosSettings,
-      );
+    const initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: iosSettings,
+    );
 
-      await _localNotifications.initialize(
-        initSettings,
-        onDidReceiveNotificationResponse: (NotificationResponse response) {
-          print("📲 Local notification tapped: ${response.payload}");
-          _handleNotificationTap(response.payload);
-        },
-      );
+    await _localNotifications.initialize(
+      initSettings,
+      onDidReceiveNotificationResponse: (NotificationResponse response) {
+        _handleNotificationTap(response.payload);
+      },
+    );
 
-      // Create notification channel for Android
-      const AndroidNotificationChannel channel = AndroidNotificationChannel(
-        'high_importance_channel',
-        'High Importance Notifications',
-        description: 'This channel is used for important notifications.',
-        importance: Importance.max,
-        enableVibration: true,
-        enableLights: true,
-        sound: RawResourceAndroidNotificationSound('notification'),
-      );
+    // Create main channel
+    await _localNotifications
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(mainChannel);
 
-      await _localNotifications
-          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-          ?.createNotificationChannel(channel);
-
-      print("✅ Local notifications initialized");
-    } catch (e) {
-      print("❌ Error initializing local notifications: $e");
-    }
+    print("✅ Local notifications initialized");
   }
+
+
+  static const AndroidNotificationChannel mainChannel = AndroidNotificationChannel(
+    'main_channel',
+    'Default Notifications',
+    description: 'Uses system default sound',
+    importance: Importance.max,
+    enableVibration: true,
+    enableLights: true,
+    // No sound → system will choose user's notification tone
+  );
+
 
   // ============================================================================
   // FOREGROUND MESSAGE HANDLER - WITH REAL-TIME PROCESSING
@@ -220,45 +213,39 @@ class FirebaseMessagingService {
   // ============================================================================
 
   Future<void> _showLocalNotification(RemoteMessage message) async {
-    try {
-      final notification = message.notification;
+    final notification = message.notification;
+    if (notification == null) return;
 
-      if (notification == null) return;
+    const androidDetails = AndroidNotificationDetails(
+      'main_channel',
+      'Default Notifications',
+      channelDescription: 'Uses system default sound',
+      importance: Importance.max,
+      priority: Priority.high,
+      enableLights: true,
+      enableVibration: true,
+    );
 
-      const AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-        'high_importance_channel',
-        'High Importance Notifications',
-        channelDescription: 'High priority notifications for incidents',
-        importance: Importance.max,
-        priority: Priority.high,
-        sound: RawResourceAndroidNotificationSound('notification'),
-        enableVibration: true,
-        enableLights: true,
-        color: Color.fromARGB(255, 46, 91, 255),
-      );
+    const iosDetails = DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
 
-      const DarwinNotificationDetails iosDetails = DarwinNotificationDetails(
-        presentAlert: true,
-        presentBadge: true,
-        presentSound: true,
-      );
+    const details = NotificationDetails(
+      android: androidDetails,
+      iOS: iosDetails,
+    );
 
-      const NotificationDetails platformChannelSpecifics = NotificationDetails(
-        android: androidDetails,
-        iOS: iosDetails,
-      );
-
-      await _localNotifications.show(
-        notification.hashCode,
-        notification.title,
-        notification.body,
-        platformChannelSpecifics,
-        payload: message.data['screen'] ?? '/notifications',
-      );
-    } catch (e) {
-      print("❌ Error showing local notification: $e");
-    }
+    await _localNotifications.show(
+      notification.hashCode,
+      notification.title,
+      notification.body,
+      details,
+      payload: message.data['screen'] ?? '/notifications',
+    );
   }
+
 
   // ============================================================================
   // NOTIFICATION TAP HANDLER

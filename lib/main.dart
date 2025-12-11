@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -11,6 +10,7 @@ import 'package:incident_reporting_frontend/services/graphql_service.dart';
 import 'package:incident_reporting_frontend/services/notifications_service.dart';
 import 'package:incident_reporting_frontend/services/firebase_messaging_service.dart';
 import 'package:incident_reporting_frontend/services/websocket_notification_service.dart';
+import 'package:incident_reporting_frontend/services/config_service.dart';
 import 'package:incident_reporting_frontend/utils/graphql_query.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -20,10 +20,23 @@ import 'theme/app_theme.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // INITIALIZE CONFIG SERVICE FIRST (BEFORE FIREBASE)
+  try {
+    await ConfigService().init();
+    print("✅ ConfigService initialized successfully");
+  } catch (e) {
+    print("❌ Error initializing ConfigService: $e");
+  }
+
   // Initialize Firebase
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
+  try {
+    await Firebase.initializeApp(
+      options: DefaultFirebaseOptions.currentPlatform,
+    );
+    print("✅ Firebase initialized");
+  } catch (e) {
+    print("❌ Firebase initialization error: $e");
+  }
 
   runApp(const SmartIncidentApp());
 }
@@ -76,6 +89,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   late FirebaseMessagingService _firebaseMessagingService;
   late WebSocketNotificationsService _webSocketService;
   bool _isChecking = true;
+  String? _errorMessage;
 
   @override
   void initState() {
@@ -86,81 +100,95 @@ class _AuthWrapperState extends State<AuthWrapper> {
   }
 
   Future<void> _checkAuthAndInitialize() async {
-    final notificationsService = Provider.of<NotificationsService>(context, listen: false);
+    try {
+      final notificationsService = Provider.of<NotificationsService>(context, listen: false);
 
-    // Initialize Firebase Messaging
-    await _firebaseMessagingService.initialize(
-      context,
-      notificationsService: notificationsService,
-    );
+      // Initialize Firebase Messaging
+      await _firebaseMessagingService.initialize(
+        context,
+        notificationsService: notificationsService,
+      );
 
-    // Check token validity
-    final hasValidToken = await _validateToken();
+      // Check token validity
+      final hasValidToken = await _validateToken();
 
-    if (!mounted) return;
+      if (!mounted) return;
 
-    if (hasValidToken) {
-      // Fetch notifications once logged in
-      await notificationsService.fetchNotifications();
-      await notificationsService.fetchUnreadCount();
+      if (hasValidToken) {
+        // Fetch notifications once logged in
+        await notificationsService.fetchNotifications();
+        await notificationsService.fetchUnreadCount();
 
-      // Get user credentials from SharedPreferences
-      final prefs = await SharedPreferences.getInstance();
-      var userUid = prefs.getString('userUid');
-      final token = prefs.getString('jwt_token');
+        // Get user credentials from SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        var userUid = prefs.getString('userUid');
+        final token = prefs.getString('jwt_token');
 
-      print("🔍 userUid from prefs: $userUid");
-      print("🔍 token exists: ${token != null}");
+        print("🔍 userUid from prefs: $userUid");
+        print("🔍 token exists: ${token != null}");
+        print("🔍 Backend: ${ConfigService().displayAddress}");
 
-      if (userUid == null) {
-        print("⚠️ User UID not found, fetching from GraphQL...");
-        try {
-          const String meQuery = '''
-            query {
-              me {
-                data {
-                  uid
+        if (userUid == null) {
+          print("⚠️ User UID not found, fetching from GraphQL...");
+          try {
+            const String meQuery = '''
+              query {
+                me {
+                  data {
+                    uid
+                  }
                 }
               }
+            ''';
+
+            final response = await gql.sendAuthenticatedQuery(meQuery, {});
+            final user = response['data']?['me']?['data'];
+
+            if (user != null && user['uid'] != null) {
+              userUid = user['uid'];
+              await prefs.setString('userUid', userUid!);
+              print("✅ Saved user UID from GraphQL: $userUid");
+            } else {
+              print("❌ Could not get user UID from GraphQL response");
             }
-          ''';
-
-          final response = await gql.sendAuthenticatedQuery(meQuery, {});
-          final user = response['data']?['me']?['data'];
-
-          if (user != null && user['uid'] != null) {
-            userUid = user['uid'];
-            await prefs.setString('userUid', userUid!);
-            print("✅ Saved user UID from GraphQL: $userUid");
-          } else {
-            print("❌ Could not get user UID from GraphQL response");
+          } catch (e) {
+            print("❌ Error fetching user UID: $e");
           }
-        } catch (e) {
-          print("❌ Error fetching user UID: $e");
+        } else {
+          print("✅ User UID found: $userUid");
+        }
+
+        if (userUid != null && token != null) {
+          await _webSocketService.connect(
+            userUid,
+            token,
+            notificationsService: notificationsService,
+          );
+          print("✅ WebSocket connection initiated");
+        } else {
+          print("❌ Cannot connect WebSocket - missing userUid or token");
+          print("   userUid: $userUid");
+          print("   token: ${token != null ? 'exists' : 'null'}");
+        }
+
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/dashboard');
         }
       } else {
-        print("✅ User UID found: $userUid");
+        if (mounted) {
+          Navigator.pushReplacementNamed(context, '/register');
+        }
       }
-
-      if (userUid != null && token != null) {
-        await _webSocketService.connect(
-          userUid,
-          token,
-          notificationsService: notificationsService,
-        );
-        print("✅ WebSocket connection initiated");
-      } else {
-        print("❌ Cannot connect WebSocket - missing userUid or token");
-        print("   userUid: $userUid");
-        print("   token: ${token != null ? 'exists' : 'null'}");
+    } catch (e) {
+      print("❌ Auth initialization error: $e");
+      setState(() {
+        _errorMessage = e.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() => _isChecking = false);
       }
-
-      Navigator.pushReplacementNamed(context, '/dashboard');
-    } else {
-      Navigator.pushReplacementNamed(context, '/register');
     }
-
-    setState(() => _isChecking = false);
   }
 
   Future<bool> _validateToken() async {
@@ -221,6 +249,29 @@ class _AuthWrapperState extends State<AuthWrapper> {
               const CircularProgressIndicator(color: Colors.white, strokeWidth: 3),
               const SizedBox(height: 20),
               const Text('Loading...', style: TextStyle(color: Colors.white70)),
+            ] else if (_errorMessage != null) ...[
+              const Icon(Icons.error_outline, color: Colors.white, size: 48),
+              const SizedBox(height: 16),
+              Text(
+                'Error: $_errorMessage',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: () {
+                  setState(() {
+                    _isChecking = true;
+                    _errorMessage = null;
+                  });
+                  _checkAuthAndInitialize();
+                },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.white,
+                  foregroundColor: const Color(0xFF2E5BFF),
+                ),
+                child: const Text('Retry'),
+              ),
             ],
           ],
         ),
@@ -231,7 +282,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
   @override
   void dispose() {
     _firebaseMessagingService.dispose();
-    //_webSocketService.disconnect();
     super.dispose();
   }
 }
