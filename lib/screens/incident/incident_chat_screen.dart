@@ -2,20 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:audioplayers/audioplayers.dart';
-import 'package:incident_reporting_frontend/screens/video_player_screen.dart';
+import 'package:incident_reporting_frontend/screens/incident/video_player_screen.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:photo_view/photo_view.dart';
 import 'dart:io';
 import 'dart:async';
 
-import '../services/config_service.dart';
-import '../services/graphql_service.dart';
-import '../services/media_download_service.dart';
-import '../services/media_service.dart';
-import '../services/media_url_converter.dart';
-import '../services/voice_recorder_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
+import '../../services/config_service.dart';
+import '../../services/graphql_service.dart';
+import '../../services/media_download_service.dart';
+import '../../services/media_service.dart';
+import '../../services/media_url_converter.dart';
+import '../../services/voice_recorder_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
 
 class IncidentChatScreen extends StatefulWidget {
   final String incidentUid;

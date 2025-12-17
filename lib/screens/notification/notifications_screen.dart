@@ -2,12 +2,13 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:intl/intl.dart';
-import '../services/graphql_service.dart';
-import '../services/notifications_service.dart';
-import '../utils/graphql_query.dart';
-import 'dashbord_screen.dart';
-import 'incident_chat_screen.dart';
-import 'incident_details_screen.dart';
+import '../../../services/graphql_service.dart';
+import '../../../services/notifications_service.dart';
+import '../../../utils/graphql_query.dart';
+import '../dashbord/dashbord_screen.dart';
+import '../incident/incident_chat_screen.dart';
+import '../incident/incident_details_screen.dart';
+
 
 class NotificationsScreen extends StatefulWidget {
   @override

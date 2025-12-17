@@ -1,27 +1,19 @@
 import 'package:flutter/material.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
-import './register_police_officer_tab.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import 'agency_form.dart';
 
-class PoliceOfficersByStationScreen extends StatefulWidget {
-  final String stationUid;
-  final String stationName;
-
-  const PoliceOfficersByStationScreen({
-    super.key,
-    required this.stationUid,
-    required this.stationName,
-  });
+class AgencyManagementScreen extends StatefulWidget {
+  const AgencyManagementScreen({super.key});
 
   @override
-  State<PoliceOfficersByStationScreen> createState() => _PoliceOfficersByStationScreenState();
+  State<AgencyManagementScreen> createState() => _AgencyManagementScreenState();
 }
 
-class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationScreen>
+class _AgencyManagementScreenState extends State<AgencyManagementScreen>
     with TickerProviderStateMixin {
   final gql = GraphQLService();
-  late Future<Map<String, dynamic>> policeOfficersResponse;
+  late Future<Map<String, dynamic>> agenciesResponse;
   late AnimationController _animationController;
   late AnimationController _fabAnimationController;
   late Animation<double> _fadeAnimation;
@@ -34,16 +26,6 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
   bool _isLoading = false;
   String _searchQuery = '';
   final TextEditingController _searchController = TextEditingController();
-
-  final List<Map<String, String>> _ranks = [
-    {"value": "PC", "label": "Police Constable (PC)"},
-    {"value": "CPL", "label": "Corporal (CPL)"},
-    {"value": "SGT", "label": "Sergeant (SGT)"},
-    {"value": "S_SGT", "label": "Senior Sergeant (S/SGT)"},
-    {"value": "SM", "label": "Staff Sergeant (SM)"},
-    {"value": "A_ISP", "label": "Assistant Inspector (A/ISP)"},
-    {"value": "ISP", "label": "Inspector (ISP)"},
-  ];
 
   @override
   void initState() {
@@ -71,7 +53,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
       CurvedAnimation(parent: _fabAnimationController, curve: Curves.elasticOut),
     );
 
-    policeOfficersResponse = _fetchPoliceOfficers();
+    agenciesResponse = _fetchAgencies();
     _animationController.forward();
     _fabAnimationController.forward();
   }
@@ -84,36 +66,54 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
     super.dispose();
   }
 
-  Future<Map<String, dynamic>> _fetchPoliceOfficers() async {
+  Future<Map<String, dynamic>> _fetchAgencies() async {
     setState(() => _isLoading = true);
 
     try {
-      final response = await gql.sendAuthenticatedQuery(getPoliceOfficersByStationQuery, {
+      final variables = {
         "pageableParam": {
           "page": _currentPage,
           "size": _pageSize,
-          "sortBy": "userAccount.name",
-          "sortDirection": "ASC",
-          "isActive": true,
-        },
-        "policeStationUid": widget.stationUid,
-      });
+          "sortBy": "createdAt",
+          "sortDirection": "DESC",
+          "searchParam": _searchQuery.isEmpty ? null : _searchQuery,
+        }
+      };
 
-      final data = response['data']?['getPoliceOfficersByStation'] ?? {};
-      final policeOfficers = data['data'] ?? [];
+      final response = await gql.sendAuthenticatedQuery(getAgenciesQuery, variables);
+
+      if (response['errors'] != null) {
+        final errorMessage = response['errors'][0]['message'] ?? 'Unknown error';
+        _showModernSnackBar('Error fetching agencies: $errorMessage', isSuccess: false);
+        return {
+          'agencies': [],
+          'totalElements': 0,
+          'totalPages': 0,
+          'currentPage': _currentPage,
+        };
+      }
+
+      final data = response['data']?['getAgencies'] ?? {};
+      final agencies = data['data'] ?? [];
       final totalPages = data['pages'] ?? 0;
 
       setState(() => _hasMore = _currentPage < totalPages - 1);
 
       return {
-        'policeOfficers': List<Map<String, dynamic>>.from(policeOfficers),
+        'agencies': List<Map<String, dynamic>>.from(agencies),
         'totalElements': data['elements'] ?? 0,
         'totalPages': totalPages,
         'currentPage': _currentPage,
       };
     } catch (e) {
-      print("Error fetching police officers: $e");
-      rethrow;
+      print("Error fetching agencies: $e");
+      _showModernSnackBar('Error fetching agencies: $e', isSuccess: false);
+      return {
+        'agencies': [],
+        'totalElements': 0,
+        'totalPages': 0,
+        'currentPage': _currentPage,
+      };
     } finally {
       setState(() => _isLoading = false);
     }
@@ -122,7 +122,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
   void _loadNextPage() {
     if (_hasMore && !_isLoading) {
       setState(() => _currentPage++);
-      policeOfficersResponse = _fetchPoliceOfficers();
+      agenciesResponse = _fetchAgencies();
     }
   }
 
@@ -133,9 +133,128 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
       _searchQuery = '';
       _searchController.clear();
     });
-    policeOfficersResponse = _fetchPoliceOfficers();
+    agenciesResponse = _fetchAgencies();
     _animationController.reset();
     _animationController.forward();
+  }
+
+  void _deleteAgency(String uid) async {
+    final confirm = await _showModernDialog();
+
+    if (confirm == true) {
+      try {
+        final response = await gql.sendAuthenticatedMutation(
+          deleteAgencyMutation,
+          {"uid": uid},
+        );
+        final result = response['data']?['deleteAgency'];
+        final message = result?['message'] ?? "Delete failed";
+        final isSuccess = result?['status'] == true;
+
+        _showModernSnackBar(message, isSuccess: isSuccess);
+
+        if (isSuccess) {
+          _refreshList();
+        }
+      } catch (e) {
+        _showModernSnackBar("Error deleting agency: $e", isSuccess: false);
+      }
+    }
+  }
+
+  Future<bool?> _showModernDialog() {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => TweenAnimationBuilder<double>(
+        duration: const Duration(milliseconds: 800),
+        tween: Tween(begin: 0.0, end: 1.0),
+        builder: (context, value, child) => Transform.scale(
+          scale: value,
+          child: AlertDialog(
+            backgroundColor: Colors.white,
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            elevation: 0,
+            content: Container(
+              decoration: BoxDecoration(
+                color: Color(0xFFF8F9FC),
+                borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Color(0xFF2E5BFF).withOpacity(0.1),
+                    blurRadius: 20,
+                    offset: Offset(0, 10),
+                  ),
+                ],
+              ),
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    width: 60,
+                    height: 60,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Color(0xFFFF6B6B), Color(0xFFFF5252)],
+                      ),
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: const Icon(
+                      Icons.warning_rounded,
+                      color: Colors.white,
+                      size: 32,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    'Confirm Deletion',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1F36),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Are you sure you want to delete this agency? This action cannot be undone.',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Color(0xFF8F9BB3),
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Expanded(
+                        child: _ModernButton(
+                          text: 'Cancel',
+                          onPressed: () => Navigator.of(context).pop(false),
+                          isOutlined: true,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _ModernButton(
+                          text: 'Delete',
+                          onPressed: () => Navigator.of(context).pop(true),
+                          gradient: LinearGradient(
+                            colors: [Color(0xFFFF6B6B), Color(0xFFFF5252)],
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   void _showModernSnackBar(String message, {required bool isSuccess}) {
@@ -188,91 +307,20 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
     );
   }
 
-  void _showRegisterForm({Map<String, dynamic>? existingOfficer}) {
-    showGeneralDialog(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: '',
-      transitionDuration: const Duration(milliseconds: 800),
-      pageBuilder: (context, animation1, animation2) => Container(),
-      transitionBuilder: (context, animation1, animation2, child) {
-        return Transform.scale(
-          scale: animation1.value,
-          child: Opacity(
-            opacity: animation1.value,
-            child: Dialog(
-              backgroundColor: Colors.transparent,
-              insetPadding: const EdgeInsets.all(20),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: Color(0xFFF8F9FC),
-                  borderRadius: BorderRadius.circular(20),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Color(0xFF2E5BFF).withOpacity(0.1),
-                      blurRadius: 20,
-                      offset: Offset(0, 10),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(20),
-                  child: SizedBox(
-                    height: 600,
-                    child: Column(
-                      children: [
-                        Container(
-                          height: 60,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
-                            ),
-                          ),
-                          child: Row(
-                            children: [
-                              const SizedBox(width: 20),
-                              Icon(
-                                existingOfficer != null ? Icons.edit : Icons.person_add,
-                                color: Colors.white,
-                              ),
-                              const SizedBox(width: 20),
-                              Expanded(
-                                child: Text(
-                                  existingOfficer != null ? 'Edit Police Officer' : 'Register Police Officer',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: Colors.white,
-                                  ),
-                                ),
-                              ),
-                              IconButton(
-                                icon: const Icon(Icons.close, color: Colors.white),
-                                onPressed: () => Navigator.pop(context),
-                              ),
-                            ],
-                          ),
-                        ),
-                        Expanded(
-                          child: RegisterPoliceOfficerTab(
-                            existingOfficer: existingOfficer,
-                            preSelectedStationUid: widget.stationUid,
-                            onSubmit: () {
-                              Navigator.pop(context);
-                              _refreshList();
-                            },
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        );
-      },
+  void _showRegisterForm({Map<String, dynamic>? existingAgency}) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => AgencyForm(
+          existingAgency: existingAgency,
+          onSubmit: () {},
+        ),
+      ),
     );
+
+    if (result == true) {
+      _refreshList();
+    }
   }
 
   Widget _buildModernSearchBar() {
@@ -291,13 +339,20 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
       ),
       child: TextField(
         controller: _searchController,
-        onChanged: (value) => setState(() => _searchQuery = value),
+        onChanged: (value) {
+          setState(() {
+            _searchQuery = value;
+            _currentPage = 0;
+            _hasMore = true;
+            agenciesResponse = _fetchAgencies();
+          });
+        },
         style: TextStyle(
           fontSize: 14,
           color: Color(0xFF1A1F36),
         ),
         decoration: InputDecoration(
-          hintText: 'Search police officer...',
+          hintText: 'Search agency...',
           hintStyle: TextStyle(
             fontSize: 14,
             color: Color(0xFF8F9BB3),
@@ -317,7 +372,12 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
             icon: const Icon(Icons.clear, color: Color(0xFF8F9BB3)),
             onPressed: () {
               _searchController.clear();
-              setState(() => _searchQuery = '');
+              setState(() {
+                _searchQuery = '';
+                _currentPage = 0;
+                _hasMore = true;
+                agenciesResponse = _fetchAgencies();
+              });
             },
           )
               : null,
@@ -331,82 +391,55 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
     );
   }
 
-  List<Map<String, dynamic>> _filterPoliceOfficers(List<Map<String, dynamic>> policeOfficers) {
-    if (_searchQuery.isEmpty) return policeOfficers;
+  List<Map<String, dynamic>> _filterAgencies(List<Map<String, dynamic>> agencies) {
+    if (_searchQuery.isEmpty) return agencies;
 
-    return policeOfficers.where((officer) {
-      final name = officer['userAccount']?['name']?.toString().toLowerCase() ?? '';
-      final badgeNumber = officer['badgeNumber']?.toString().toLowerCase() ?? '';
-      final code = officer['code']?.toString().toLowerCase() ?? '';
-      final rankLabel = _ranks.firstWhere(
-            (rank) => rank['value'] == officer['code'],
-        orElse: () => {'label': ''},
-      )['label']?.toLowerCase() ?? '';
+    return agencies.where((agency) {
+      final name = agency['name']?.toString().toLowerCase() ?? '';
+      final code = agency['code']?.toString().toLowerCase() ?? '';
+      final description = agency['description']?.toString().toLowerCase() ?? '';
       final query = _searchQuery.toLowerCase();
 
-      return name.contains(query) || badgeNumber.contains(query) || code.contains(query) || rankLabel.contains(query);
+      return name.contains(query) || code.contains(query) || description.contains(query);
     }).toList();
   }
 
-  String _normalizePhoneNumber(String? phoneNumber) {
-    if (phoneNumber == null) return '-';
-    String cleaned = phoneNumber.replaceAll(RegExp(r'[^\d+]'), '');
-    if (cleaned.startsWith('0')) {
-      return '+255${cleaned.substring(1)}';
-    } else if (cleaned.startsWith('+255')) {
-      return cleaned;
-    }
-    return phoneNumber;
-  }
+  Widget _buildAgencyCard(Map<String, dynamic> agency, int index) {
+    final agencyName = agency['name']?.toString() ?? 'Unknown Agency';
+    final agencyCode = agency['code']?.toString() ?? '-';
+    final agencyDescription = agency['description']?.toString() ?? 'No description';
+    final agencyUid = agency['uid']?.toString() ?? '';
 
-  String _getRankLabel(String? code) {
-    return _ranks.firstWhere(
-          (rank) => rank['value'] == code,
-      orElse: () => {'label': code ?? 'N/A'},
-    )['label']!;
-  }
-
-  Widget _buildPoliceOfficerCard(Map<String, dynamic> officer, int index) {
-    final officerName = officer['userAccount']?['name']?.toString() ?? 'Unknown Officer';
-    final badgeNumber = officer['badgeNumber']?.toString() ?? 'N/A';
-    final rankLabel = _getRankLabel(officer['code']);
-    final phoneNumber = _normalizePhoneNumber(officer['userAccount']?['phoneNumber']);
-    final stationName = officer['station']?['name']?.toString() ?? 'N/A';
-
-    Color getRankColor() {
-      final code = officer['code']?.toString().toLowerCase() ?? '';
-      if (code.contains('inspector') || code.contains('superintendent') || code.contains('commander')) {
-        return Colors.amber[700] ?? Colors.amber;
-      } else if (code.contains('sergeant') || code.contains('corporal')) {
+    Color getAgencyColor() {
+      final name = agencyName.toLowerCase();
+      if (name.contains('national') || name.contains('headquarters')) {
+        return Colors.red[700] ?? Colors.red;
+      } else if (name.contains('regional')) {
+        return Colors.indigo[700] ?? Colors.indigo;
+      } else if (name.contains('community')) {
         return Colors.green[700] ?? Colors.green;
-      } else if (code.contains('constable')) {
-        return Color(0xFF2E5BFF);
       } else {
         return Color(0xFF2E5BFF);
       }
     }
 
-    LinearGradient getHeroGradient() {
-      final rankColor = getRankColor();
-      return LinearGradient(
-        colors: [
-          rankColor.withOpacity(0.8),
-          rankColor,
-        ],
-        begin: Alignment.topLeft,
-        end: Alignment.bottomRight,
-      );
+    IconData getAgencyIcon() {
+      final name = agencyName.toLowerCase();
+      if (name.contains('national') || name.contains('headquarters')) {
+        return Icons.account_balance_rounded;
+      } else if (name.contains('community')) {
+        return Icons.people_rounded;
+      } else {
+        return Icons.business_rounded;
+      }
     }
 
-    return ConstrainedBox(
-      constraints: BoxConstraints(
-        minHeight: 120.0,
-        maxWidth: MediaQuery.of(context).size.width - 32,
-      ),
-      child: FadeTransition(
-        opacity: _fadeAnimation,
-        child: Transform.translate(
-          offset: Offset(0, _slideAnimation.value * (index + 1)),
+    return AnimatedBuilder(
+      animation: _slideAnimation,
+      builder: (context, child) => Transform.translate(
+        offset: Offset(0, _slideAnimation.value),
+        child: FadeTransition(
+          opacity: _fadeAnimation,
           child: Container(
             margin: EdgeInsets.only(
               left: 20,
@@ -415,10 +448,10 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
               top: index == 0 ? 10 : 0,
             ),
             decoration: BoxDecoration(
-              color: getRankColor().withOpacity(0.08),
+              color: getAgencyColor().withOpacity(0.06),
               borderRadius: BorderRadius.circular(20),
               border: Border.all(
-                color: getRankColor().withOpacity(0.2),
+                color: getAgencyColor().withOpacity(0.15),
                 width: 1,
               ),
               boxShadow: [
@@ -433,7 +466,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
               color: Colors.transparent,
               child: InkWell(
                 borderRadius: BorderRadius.circular(20),
-                onTap: () => _showRegisterForm(existingOfficer: officer),
+                onTap: () => _showRegisterForm(existingAgency: agency),
                 child: Padding(
                   padding: const EdgeInsets.all(20),
                   child: Column(
@@ -441,24 +474,34 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                       Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Container(
-                            width: 56,
-                            height: 56,
-                            decoration: BoxDecoration(
-                              gradient: getHeroGradient(),
-                              borderRadius: BorderRadius.circular(12),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: getRankColor().withOpacity(0.3),
-                                  blurRadius: 8,
-                                  offset: const Offset(0, 2),
+                          Hero(
+                            tag: 'agency_${agency['uid'] ?? index}',
+                            child: Container(
+                              width: 64,
+                              height: 64,
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    getAgencyColor().withOpacity(0.8),
+                                    getAgencyColor(),
+                                  ],
+                                  begin: Alignment.topLeft,
+                                  end: Alignment.bottomRight,
                                 ),
-                              ],
-                            ),
-                            child: const Icon(
-                              Icons.person_rounded,
-                              color: Colors.white,
-                              size: 28,
+                                borderRadius: BorderRadius.circular(16),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: getAgencyColor().withOpacity(0.3),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
+                              ),
+                              child: Icon(
+                                getAgencyIcon(),
+                                color: Colors.white,
+                                size: 32,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 20),
@@ -466,47 +509,46 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
                               children: [
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        officerName,
-                                        style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: Color(0xFF1A1F36),
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
-                                    ),
-                                  ],
+                                Text(
+                                  agencyName,
+                                  style: TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.w600,
+                                    color: Color(0xFF1A1F36),
+                                  ),
+                                  maxLines: 2,
+                                  overflow: TextOverflow.ellipsis,
                                 ),
-                                const SizedBox(height: 4),
-                                Wrap(
-                                  spacing: 8,
-                                  runSpacing: 4,
-                                  children: [
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                      decoration: BoxDecoration(
-                                        color: getRankColor().withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(12),
-                                        border: Border.all(
-                                          color: getRankColor().withOpacity(0.3),
-                                          width: 1,
-                                        ),
+                                const SizedBox(height: 6),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                  decoration: BoxDecoration(
+                                    color: getAgencyColor().withOpacity(0.15),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(
+                                      color: getAgencyColor().withOpacity(0.3),
+                                      width: 1,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Icon(
+                                        Icons.category_rounded,
+                                        size: 14,
+                                        color: getAgencyColor(),
                                       ),
-                                      child: Text(
-                                        rankLabel,
+                                      const SizedBox(width: 4),
+                                      Text(
+                                        agencyCode,
                                         style: TextStyle(
-                                          color: getRankColor(),
-                                          fontSize: 10,
+                                          color: getAgencyColor(),
+                                          fontSize: 12,
                                           fontWeight: FontWeight.w600,
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
                                 ),
                               ],
                             ),
@@ -514,56 +556,47 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                         ],
                       ),
                       const SizedBox(height: 20),
-                      Column(
+                      Row(
                         children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _buildOfficerInfoRow(
-                                  Icons.badge_rounded,
-                                  'Badge',
-                                  badgeNumber,
-                                ),
-                              ),
-                              const SizedBox(width: 20),
-                              Expanded(
-                                child: _buildOfficerInfoRow(
-                                  Icons.phone_rounded,
-                                  'Phone',
-                                  phoneNumber,
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 8),
-                          _buildOfficerInfoRow(
-                            Icons.local_police_rounded,
-                            'Station',
-                            stationName,
+                          Expanded(
+                            child: _buildAgencyInfoRow(
+                              Icons.description_rounded,
+                              'Description',
+                              agencyDescription,
+                              maxLines: 2,
+                            ),
                           ),
                         ],
+                      ),
+                      const SizedBox(height: 12),
+                      _buildAgencyInfoRow(
+                        Icons.pin_rounded,
+                        'Agency ID',
+                        agencyUid.isNotEmpty ? agencyUid.substring(0, 8).toUpperCase() : 'N/A',
                       ),
                       const SizedBox(height: 20),
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          _buildOfficerActionButton(
+                          _buildAgencyActionButton(
                             icon: Icons.edit_rounded,
                             label: 'Edit',
-                            color: Color(0xFF2E5BFF),
-                            onPressed: () => _showRegisterForm(existingOfficer: officer),
+                            color: getAgencyColor(),
+                            onPressed: () => _showRegisterForm(existingAgency: agency),
                           ),
-                          _buildOfficerActionButton(
-                            icon: Icons.schedule_rounded,
-                            label: 'Shifts',
-                            color: Color(0xFFFFB75E),
-                            onPressed: () => _viewOfficerShifts(officer),
-                          ),
-                          _buildOfficerActionButton(
-                            icon: Icons.info_outline_rounded,
-                            label: 'Details',
+                          _buildAgencyActionButton(
+                            icon: Icons.domain_rounded,
+                            label: 'Departments',
                             color: Color(0xFF4ECDC4),
-                            onPressed: () => _showOfficerDetails(officer),
+                            onPressed: () {
+                              // Navigate to departments screen
+                            },
+                          ),
+                          _buildAgencyActionButton(
+                            icon: Icons.delete_outline_rounded,
+                            label: 'Delete',
+                            color: Color(0xFFFF6B6B),
+                            onPressed: () => _deleteAgency(agencyUid),
                           ),
                         ],
                       ),
@@ -578,7 +611,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
     );
   }
 
-  Widget _buildOfficerInfoRow(
+  Widget _buildAgencyInfoRow(
       IconData icon,
       String label,
       String value, {
@@ -632,7 +665,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
     );
   }
 
-  Widget _buildOfficerActionButton({
+  Widget _buildAgencyActionButton({
     required IconData icon,
     required String label,
     required Color color,
@@ -642,24 +675,24 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
       mainAxisSize: MainAxisSize.min,
       children: [
         Container(
-          width: 52,
-          height: 52,
+          width: 48,
+          height: 48,
           decoration: BoxDecoration(
             color: color.withOpacity(0.1),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: color.withOpacity(0.2),
               width: 1,
             ),
           ),
           child: IconButton(
-            icon: Icon(icon, size: 22),
+            icon: Icon(icon, size: 20),
             color: color,
             onPressed: onPressed,
             padding: EdgeInsets.zero,
           ),
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 4),
         Text(
           label,
           style: TextStyle(
@@ -668,45 +701,10 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
             fontWeight: FontWeight.w500,
           ),
           textAlign: TextAlign.center,
-          maxLines: 2,
+          maxLines: 1,
           overflow: TextOverflow.ellipsis,
         ),
       ],
-    );
-  }
-
-  void _viewOfficerShifts(Map<String, dynamic> officer) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('Viewing shifts for ${officer['userAccount']?['name'] ?? 'officer'}'),
-        backgroundColor: Color(0xFF2E5BFF),
-      ),
-    );
-  }
-
-  void _showOfficerDetails(Map<String, dynamic> officer) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Officer Details'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('Name: ${officer['userAccount']?['name'] ?? 'N/A'}'),
-            Text('Badge: ${officer['badgeNumber'] ?? 'N/A'}'),
-            Text('Rank: ${_getRankLabel(officer['code'])}'),
-            Text('Phone: ${_normalizePhoneNumber(officer['userAccount']?['phoneNumber'])}'),
-            Text('Station: ${officer['station']?['name'] ?? 'N/A'}'),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Close'),
-          ),
-        ],
-      ),
     );
   }
 
@@ -765,7 +763,10 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+          colors: [
+            Color(0xFF2E5BFF),
+            Color(0xFF1E3A8A),
+          ],
         ),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
@@ -785,7 +786,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
               borderRadius: BorderRadius.circular(8),
             ),
             child: const Icon(
-              Icons.people,
+              Icons.business_rounded,
               color: Colors.white,
               size: 32,
             ),
@@ -796,7 +797,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Total Police Officers',
+                  'Total Agencies',
                   style: TextStyle(
                     fontSize: 14,
                     color: Colors.white.withOpacity(0.7),
@@ -840,7 +841,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
               ),
               child: FlexibleSpaceBar(
                 title: Text(
-                  'Officers at ${widget.stationName}',
+                  'Agency Management',
                   style: TextStyle(
                     fontSize: 18,
                     fontWeight: FontWeight.w700,
@@ -875,7 +876,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
           ),
           SliverToBoxAdapter(
             child: FutureBuilder<Map<String, dynamic>>(
-              future: policeOfficersResponse,
+              future: agenciesResponse,
               builder: (context, snapshot) {
                 if (snapshot.connectionState == ConnectionState.waiting && _currentPage == 0) {
                   return Container(
@@ -903,7 +904,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                           ),
                           const SizedBox(height: 20),
                           Text(
-                            'Loading police officers...',
+                            'Loading agencies...',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -948,7 +949,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                         ),
                         const SizedBox(height: 20),
                         Text(
-                          'Failed to load police officers',
+                          'Failed to load agencies',
                           style: TextStyle(
                             fontSize: 16,
                             fontWeight: FontWeight.w600,
@@ -976,10 +977,10 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                   );
                 } else if (snapshot.hasData) {
                   final data = snapshot.data!;
-                  final allOfficers = data['policeOfficers'] as List<Map<String, dynamic>>;
-                  final filteredOfficers = _filterPoliceOfficers(allOfficers);
+                  final allAgencies = data['agencies'] as List<Map<String, dynamic>>;
+                  final filteredAgencies = _filterAgencies(allAgencies);
 
-                  if (allOfficers.isEmpty) {
+                  if (allAgencies.isEmpty) {
                     return Container(
                       margin: const EdgeInsets.all(20),
                       padding: const EdgeInsets.all(20),
@@ -1006,14 +1007,14 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                               borderRadius: BorderRadius.circular(15),
                             ),
                             child: const Icon(
-                              Icons.people_outline,
+                              Icons.business_outlined,
                               color: Colors.white,
                               size: 40,
                             ),
                           ),
                           const SizedBox(height: 20),
                           Text(
-                            'No police officers found',
+                            'No agencies found',
                             style: TextStyle(
                               fontSize: 16,
                               fontWeight: FontWeight.w600,
@@ -1023,7 +1024,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                           ),
                           const SizedBox(height: 12),
                           Text(
-                            'Click the (+) button to add the first police officer',
+                            'Click the (+) button to add the first agency',
                             style: TextStyle(
                               fontSize: 14,
                               color: Color(0xFF8F9BB3),
@@ -1039,7 +1040,7 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                     children: [
                       _buildStatsCard(data),
                       const SizedBox(height: 20),
-                      if (filteredOfficers.isEmpty && _searchQuery.isNotEmpty)
+                      if (filteredAgencies.isEmpty && _searchQuery.isNotEmpty)
                         Container(
                           margin: const EdgeInsets.all(20),
                           padding: const EdgeInsets.all(20),
@@ -1084,8 +1085,8 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
                           ),
                         )
                       else
-                        ...filteredOfficers.asMap().entries.map((entry) {
-                          return _buildPoliceOfficerCard(entry.value, entry.key);
+                        ...filteredAgencies.asMap().entries.map((entry) {
+                          return _buildAgencyCard(entry.value, entry.key);
                         }).toList(),
                       if (_hasMore && _searchQuery.isEmpty) _buildLoadMoreButton(),
                       const SizedBox(height: 100),
@@ -1119,9 +1120,9 @@ class _PoliceOfficersByStationScreenState extends State<PoliceOfficersByStationS
             onPressed: () => _showRegisterForm(),
             backgroundColor: Colors.transparent,
             elevation: 0,
-            icon: const Icon(Icons.person_add, color: Colors.white),
+            icon: const Icon(Icons.add_business, color: Colors.white),
             label: Text(
-              'Register Police Officer',
+              'Register Agency',
               style: TextStyle(
                 fontSize: 14,
                 fontWeight: FontWeight.w600,

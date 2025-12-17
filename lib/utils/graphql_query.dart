@@ -1182,4 +1182,136 @@ const String getAllOfficersOnDutyNowQuery = '''
   }
 ''';
 
+// ============================================================================
+// AGENCY QUERIES
+// ============================================================================
 
+const String saveAgencyMutation = """
+mutation SaveAgency(\$agencyDto: AgencyDtoInput!) {
+  saveAgency(agencyDto: \$agencyDto) {
+    status
+    message
+    data {
+      uid
+      name
+      code
+      description
+    }
+  }
+}
+""";
+
+const String getAgencyQuery = """
+query GetAgency(\$uid: String!) {
+  getAgency(uid: \$uid) {
+    status
+    message
+    data {
+      uid
+      name
+      code
+      description
+    }
+  }
+}
+""";
+
+const String deleteAgencyMutation = """
+mutation DeleteAgency(\$uid: String!) {
+  deleteAgency(uid: \$uid) {
+    status
+    message
+  }
+}
+""";
+
+const String getAgenciesQuery = """
+  query GetAgencies(\$pageableParam: PageableParamInput) {
+    getAgencies(pageableParam: \$pageableParam) {
+      data {
+        uid
+        name
+        code
+        description
+      }
+      elements
+      pages
+      size
+      page
+    }
+  }
+""";
+
+// ============================================================================
+// AGENCY QUERIES
+// ============================================================================
+const String saveDepartmentMutation = """
+mutation SaveDepartment(\$departmentDto: DepartmentDtoInput!) {
+  saveDepartment(departmentDto: \$departmentDto) {
+    status
+    message
+    data {
+      uid
+      name
+      type
+      agency {
+        uid
+        name
+        code
+        description
+      }
+    }
+  }
+}
+""";
+
+const String getDepartmentQuery = """
+query GetDepartment(\$uid: String!) {
+  getDepartment(uid: \$uid) {
+    status
+    message
+    data {
+      uid
+      name
+      type
+      agency {
+        uid
+        name
+        code
+        description
+      }
+    }
+  }
+}
+""";
+
+const String deleteDepartmentMutation = """
+mutation DeleteDepartment(\$uid: String!) {
+  deleteDepartment(uid: \$uid) {
+    status
+    message
+  }
+}
+""";
+
+const String getDepartmentsQuery = """
+  query GetDepartments(\$pageableParam: PageableParamInput) {
+    getDepartments(pageableParam: \$pageableParam) {
+      data {
+        uid
+        name
+        type
+        agency {
+          uid
+          name
+          code
+          description
+        }
+      }
+      elements
+      pages
+      size
+      page
+    }
+  }
+""";

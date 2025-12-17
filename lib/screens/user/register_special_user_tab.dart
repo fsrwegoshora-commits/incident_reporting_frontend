@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
 
 class RegisterSpecialUserTab extends StatefulWidget {
   final Map<String, dynamic>? existingUser;

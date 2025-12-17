@@ -2,9 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
 
 class ReportIncidentScreen extends StatefulWidget {
   final Map<String, dynamic> selectedStation;

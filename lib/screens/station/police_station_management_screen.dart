@@ -1,10 +1,10 @@
 import 'package:flutter/material.dart';
-import 'package:incident_reporting_frontend/screens/police_station_form.dart';
-import 'package:incident_reporting_frontend/screens/police_officers_by_station_screen.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
-import 'officer_shift_management_screen.dart';
+import 'package:incident_reporting_frontend/screens/station/police_station_form.dart';
+import 'package:incident_reporting_frontend/screens/police/police_officers_by_station_screen.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
+import '../shift/officer_shift_management_screen.dart';
 
 class PoliceStationManagementScreen extends StatefulWidget {
   const PoliceStationManagementScreen({super.key});

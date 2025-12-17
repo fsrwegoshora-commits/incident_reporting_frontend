@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:incident_reporting_frontend/screens/register_special_user_tab.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
+import 'package:incident_reporting_frontend/screens/user/register_special_user_tab.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
 
 class UserManagementScreen extends StatefulWidget {
   const UserManagementScreen({super.key});

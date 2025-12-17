@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
 import 'register_police_officer_tab.dart';
 
 class PoliceOfficerManagementScreen extends StatefulWidget {

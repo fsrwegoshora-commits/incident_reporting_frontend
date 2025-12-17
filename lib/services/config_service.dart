@@ -9,7 +9,7 @@ class ConfigService {
   late SharedPreferences _prefs;
 
   // Default values
-  static const String _defaultHost = '10.220.105.163';
+  static const String _defaultHost = '172.31.88.163';
   static const int _defaultPort = 8080;
   static const String _keyHost = 'backend_host';
   static const String _keyPort = 'backend_port';

@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:incident_reporting_frontend/providers/theme_provider.dart';
 import 'package:incident_reporting_frontend/services/notifications_service.dart';
-import 'package:incident_reporting_frontend/screens/notifications_screen.dart';
+import 'package:incident_reporting_frontend/screens/incident/notification/notifications_screen.dart';
 import 'package:incident_reporting_frontend/theme/app_theme.dart';
 
 class BaseScreen extends StatelessWidget {

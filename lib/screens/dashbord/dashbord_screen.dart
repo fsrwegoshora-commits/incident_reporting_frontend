@@ -5,20 +5,23 @@ import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:incident_reporting_frontend/screens/register_screen.dart';
-import 'package:incident_reporting_frontend/screens/report_incident_screen.dart';
+import 'package:incident_reporting_frontend/screens/user/register_screen.dart';
+import 'package:incident_reporting_frontend/screens/incident/report_incident_screen.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import '../providers/theme_provider.dart';
-import '../services/graphql_service.dart';
-import '../services/notifications_service.dart';
-import '../utils/auth_utils.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
-import 'my_incidents_screen.dart';
-import 'officer_incidents_screen.dart';
-import 'user_management_screen.dart';
-import 'police_station_management_screen.dart';
-import 'notifications_screen.dart';
+import '../../providers/theme_provider.dart';
+import '../../services/graphql_service.dart';
+import '../../services/notifications_service.dart';
+import '../../utils/auth_utils.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
+import '../admiin/admin_settings_screen.dart';
+import '../agency/agency_management_screen.dart';
+import '../department/department_management_screen.dart';
+import '../incident/my_incidents_screen.dart';
+import '../incident/officer_incidents_screen.dart';
+import '../notification/notifications_screen.dart';
+import '../user/user_management_screen.dart';
+import '../station/police_station_management_screen.dart';
 
 // ============================================================================
 // MODERN INCIDENT DASHBOARD - Complete Version
@@ -2037,13 +2040,25 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // UI COMPONENTS - Admin Section
   // ============================================================================
   Widget _buildAdminSection() {
+    // 🔴 ONLY SHOW FOR ROOT USERS
+    final isRoot = _userRole == "ROOT";
+
     return Container(
       margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // Alert Banner for urgent notifications
+          _buildAlertBanner(),
+
+          // Notifications Summary Card
+          _buildNotificationsSummaryCard(),
+
+          // ====================================================================
+          // ADMIN TOOLS HEADER
+          // ====================================================================
           Text(
-            'Admin Tools',
+            'Admin Dashboard',
             style: GoogleFonts.poppins(
               fontSize: 16,
               fontWeight: FontWeight.w700,
@@ -2051,6 +2066,127 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ),
           ),
           SizedBox(height: 16),
+
+          // ====================================================================
+          // ROOT ONLY - ORGANIZATION MANAGEMENT (Agency & Department)
+          // ====================================================================
+          if (isRoot)
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Organization Management Section Header
+                Row(
+                  children: [
+                    Container(
+                      padding: EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Color(0xFFFF6B6B).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        Icons.domain_rounded,
+                        color: Color(0xFFFF6B6B),
+                        size: 20,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Text(
+                      'Organization Setup',
+                      style: GoogleFonts.poppins(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1A1F36),
+                      ),
+                    ),
+                    Spacer(),
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Color(0xFFFF6B6B).withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        'ROOT ONLY',
+                        style: GoogleFonts.poppins(
+                          fontSize: 9,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFFFF6B6B),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 12),
+
+                // Agency & Department Management Cards (2 columns)
+                Row(
+                  children: [
+                    Expanded(
+                      child: _buildAdminCard(
+                        icon: Icons.business_rounded,
+                        title: 'Manage\nAgencies',
+                        subtitle: 'Create & edit agencies',
+                        color: Color(0xFF2E5BFF),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => AgencyManagementScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: _buildAdminCard(
+                        icon: Icons.domain_rounded,
+                        title: 'Manage\nDepartments',
+                        subtitle: 'Create & organize departments',
+                        color: Color(0xFF667EEA),
+                        onTap: () => Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => DepartmentManagementScreen(),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+
+                SizedBox(height: 20),
+              ],
+            ),
+
+          // ====================================================================
+          // STATION ADMIN TOOLS (For all admins)
+          // ====================================================================
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryBlue.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(
+                  Icons.admin_panel_settings_rounded,
+                  color: AppTheme.primaryBlue,
+                  size: 20,
+                ),
+              ),
+              SizedBox(width: 12),
+              Text(
+                'Station Management',
+                style: GoogleFonts.poppins(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: Color(0xFF1A1F36),
+                ),
+              ),
+            ],
+          ),
+          SizedBox(height: 12),
+
           GridView.count(
             crossAxisCount: 2,
             shrinkWrap: true,
@@ -2062,21 +2198,29 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               _buildAdminCard(
                 icon: Icons.people_outline_rounded,
                 title: 'Manage\nUsers',
+                subtitle: 'Add & manage officers',
+                color: Color(0xFF51CF66),
                 onTap: _openUserManagement,
               ),
               _buildAdminCard(
                 icon: Icons.location_city_outlined,
                 title: 'Police\nStations',
+                subtitle: 'Create & configure',
+                color: Color(0xFFFFB75E),
                 onTap: _openPoliceStationManagement,
               ),
               _buildAdminCard(
                 icon: Icons.description_rounded,
                 title: 'Station\nIncidents',
+                subtitle: 'View all incidents',
+                color: Color(0xFF4ECDC4),
                 onTap: _openStationIncidents,
               ),
               _buildAdminCard(
                 icon: Icons.analytics_rounded,
                 title: 'Reports\n& Analytics',
+                subtitle: 'Statistics & insights',
+                color: Color(0xFF667EEA),
                 onTap: () {
                   _showSnackBar('Reports feature coming soon');
                 },
@@ -2231,19 +2375,29 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       ),
     );
   }
+
   Widget _buildAdminCard({
     required IconData icon,
     required String title,
+    required String subtitle,
+    required Color color,
     required VoidCallback onTap,
   }) {
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding: EdgeInsets.all(16),
+        padding: EdgeInsets.all(14),
         decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: Color(0xFFE4E9F2)),
+          color: color.withOpacity(0.05),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withOpacity(0.2)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.1),
+              blurRadius: 8,
+              offset: Offset(0, 2),
+            ),
+          ],
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -2252,25 +2406,42 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             Container(
               padding: EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: AppTheme.primaryBlue.withOpacity(0.1),
+                color: color.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Icon(icon, color: AppTheme.primaryBlue, size: 20),
+              child: Icon(icon, color: color, size: 20),
             ),
-            Text(
-              title,
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: Color(0xFF1A1F36),
-                height: 1.2,
-              ),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  title,
+                  style: GoogleFonts.poppins(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: Color(0xFF1A1F36),
+                    height: 1.1,
+                  ),
+                ),
+                SizedBox(height: 3),
+                Text(
+                  subtitle,
+                  style: GoogleFonts.poppins(
+                    fontSize: 10,
+                    color: Color(0xFF8F9BB3),
+                    fontWeight: FontWeight.w500,
+                  ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ],
             ),
           ],
         ),
       ),
     );
   }
+
 
   // ============================================================================
 // OFFICER INCIDENTS CARD
@@ -3347,7 +3518,123 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         ),
                       ),
                       SizedBox(height: 14),
-                    ],
+                    ],// 🎯 ADD THIS TO YOUR EXISTING DASHBOARD CLASS
+// Add this method and update the drawer building
+
+// ============================================================================
+// UPDATE THE _buildProfileDrawer() METHOD - ADD THIS AFTER ADMIN TOOLS SECTION
+// ============================================================================
+
+// IN THE _buildProfileDrawer() METHOD, AFTER THE ADMIN TOOLS SECTION, ADD:
+
+            if (_userRole == "ROOT") ...[
+          SizedBox(height: 14),
+
+        // ====================================================================
+        // ROOT ONLY - ADMIN SETTINGS
+        // ====================================================================
+        Container(
+          width: double.infinity,
+          padding: EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Color(0xFF2E5BFF).withOpacity(0.1), Color(0xFF667EEA).withOpacity(0.1)],
+            ),
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: Color(0xFF2E5BFF).withOpacity(0.3), width: 1.5),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Color(0xFF2E5BFF),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(
+                      Icons.admin_panel_settings_rounded,
+                      color: Colors.white,
+                      size: 16,
+                    ),
+                  ),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'ROOT ADMINISTRATOR',
+                          style: GoogleFonts.poppins(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: Color(0xFF2E5BFF),
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          'Full system access',
+                          style: GoogleFonts.poppins(
+                            fontSize: 9,
+                            color: Color(0xFF2E5BFF).withOpacity(0.7),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 12),
+
+              // Root admin action buttons
+              _buildProfileActionTile(
+                Icons.domain_rounded,
+                "Manage Agencies",
+                    () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => AgencyManagementScreen(),
+                    ),
+                  );
+                },
+              ),
+              SizedBox(height: 8),
+              _buildProfileActionTile(
+                Icons.business_rounded,
+                "Manage Departments",
+                    () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => DepartmentManagementScreen(),
+                    ),
+                  );
+                },
+              ),
+              SizedBox(height: 8),
+              _buildProfileActionTile(
+                Icons.settings_rounded,
+                "Admin Settings",
+                    () {
+                  Navigator.pop(context);
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (context) => AdminSettingsScreen(),
+                    ),
+                  );
+                },
+              ),
+            ],
+          ),
+        ),
+        ],
 
                     // ==================================================================
                     // LOGOUT BUTTON

@@ -1,9 +1,9 @@
 // lib/screens/register_screen.dart
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../services/graphql_service.dart';
-import '../utils/graphql_query.dart';
-import '../theme/app_theme.dart';
+import '../../services/graphql_service.dart';
+import '../../utils/graphql_query.dart';
+import '../../theme/app_theme.dart';
 import 'otp_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
