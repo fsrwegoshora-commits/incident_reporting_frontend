@@ -22,6 +22,7 @@ import '../incident/officer_incidents_screen.dart';
 import '../notification/notifications_screen.dart';
 import '../user/user_management_screen.dart';
 import '../station/police_station_management_screen.dart';
+import 'improved_shift_card.dart';
 
 // ============================================================================
 // MODERN INCIDENT DASHBOARD - Complete Version
@@ -55,6 +56,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // Shifts Data
   List<Map<String, dynamic>> _officerShifts = [];
   bool _isLoadingShifts = false;
+
+  Timer? _timer;
+  Duration _remaining = Duration.zero;
+  double _progress = 0.0;
 
   // Location & Nearby Stations
   Position? _currentPosition;
@@ -208,7 +213,13 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       final gql = GraphQLService();
       final response = await gql.sendAuthenticatedQuery(
         getShiftsByOfficerQuery,
-        {'officerUid': _officerUid, 'page': 0, 'size': 10},
+        {
+          'policeOfficerUid': _officerUid,
+          'pageableParam': {
+            'page': 0,
+            'size': 10,
+          },
+        },
       );
 
       if (response.containsKey('errors')) return;
@@ -1598,7 +1609,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   Widget _buildImprovedShiftCard(Map<String, dynamic> shift) {
-    final shiftType = shift['shiftType'] ?? 'N/A';
+    final shiftTime = shift['shiftTime'] ?? 'N/A';
+    final shiftDutyType = shift['shiftDutyType'] ?? 'N/A';
     final shiftDate = shift['shiftDate'] ?? '';
     final startTime = shift['startTime'] ?? '06:00';
     final endTime = shift['endTime'] ?? '14:00';
@@ -1606,7 +1618,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     final isPunishment = shift['isPunishmentMode'] ?? false;
 
     final isCurrentShift = _currentShift != null && _currentShift!['uid'] == shift['uid'];
-    final isOffShift = shiftType.toUpperCase() == 'OFF';
+    final isOffShift = shiftTime.toUpperCase() == 'OFF';
     final isPastShift = _isShiftInPast(shiftDate);
 
     final statusInfo = _getShiftStatusInfo(
@@ -1676,7 +1688,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                             children: [
                               Expanded(
                                 child: Text(
-                                  shiftType,
+                                  shiftTime,
                                   style: GoogleFonts.poppins(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w700,
@@ -1714,6 +1726,22 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                               color: statusInfo['isCompleted']
                                   ? Color(0xFF8F9BB3).withOpacity(0.6)
                                   : Color(0xFF8F9BB3),
+                            ),
+                          ),
+                          SizedBox(height: 6),
+                          Container(
+                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            decoration: BoxDecoration(
+                              color: statusInfo['accentColor'].withOpacity(0.1),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              'Duty: $shiftDutyType',
+                              style: GoogleFonts.poppins(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w500,
+                                color: statusInfo['accentColor'],
+                              ),
                             ),
                           ),
                         ],

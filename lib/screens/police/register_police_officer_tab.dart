@@ -24,10 +24,12 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
   final _badgeNumberController = TextEditingController();
   String? _selectedUserUid;
   String? _selectedStationUid;
+  String? _selectedDepartmentUid;
   String _selectedRank = 'PC';
   bool _isLoading = false;
   List<Map<String, dynamic>> _specialUsers = [];
   List<Map<String, dynamic>> _policeStations = [];
+  List<Map<String, dynamic>> _departments = [];
 
   // Define ranks with both value and display name
   final List<Map<String, String>> _ranks = [
@@ -48,6 +50,7 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
       _badgeNumberController.text = widget.existingOfficer!['badgeNumber'] ?? '';
       _selectedUserUid = widget.existingOfficer!['userAccount']?['uid']?.toString();
       _selectedStationUid = widget.existingOfficer!['station']?['uid']?.toString();
+      _selectedDepartmentUid = widget.existingOfficer!['department']?['uid']?.toString();
       _selectedRank = widget.existingOfficer!['code'] ?? 'PC';
     } else if (widget.preSelectedStationUid != null) {
       _selectedStationUid = widget.preSelectedStationUid;
@@ -66,6 +69,7 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
       await Future.wait([
         _fetchSpecialUsers(),
         _fetchPoliceStations(),
+        _fetchDepartments(),
       ]);
     } catch (e) {
       _showErrorSnackBar("Error loading data: $e");
@@ -117,6 +121,29 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
     }
   }
 
+  Future<void> _fetchDepartments() async {
+    final gql = GraphQLService();
+    try {
+      final response = await gql.sendAuthenticatedQuery(getDepartmentsQuery, {
+        "pageableParam": {
+          "page": 0,
+          "size": 100,
+          "sortBy": "name",
+          "sortDirection": "ASC",
+        }
+      });
+      final data = response['data']?['getDepartments'] ?? {};
+      setState(() {
+        _departments = List<Map<String, dynamic>>.from(data['data'] ?? []);
+        if (_selectedDepartmentUid == null && _departments.isNotEmpty && widget.existingOfficer == null) {
+          _selectedDepartmentUid = _departments.first['uid']?.toString();
+        }
+      });
+    } catch (e) {
+      print("Error fetching departments: $e");
+    }
+  }
+
   Future<void> _submit() async {
     if (!_formKey.currentState!.validate()) return;
 
@@ -130,6 +157,7 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
           "badgeNumber": _badgeNumberController.text.trim(),
           "userUid": _selectedUserUid,
           "stationUid": _selectedStationUid,
+          "departmentUid": _selectedDepartmentUid,
           "code": _selectedRank,
         }
       };
@@ -139,19 +167,32 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
       final response = await gql.sendAuthenticatedMutation(savePoliceOfficerMutation, variables);
       final result = response['data']?['savePoliceOfficer'];
 
-      if (result['status'] == 'Success') {
-        _showSuccessSnackBar(widget.existingOfficer != null
-            ? "Police officer updated successfully"
-            : "Police officer registered successfully");
-        if (widget.onSubmit != null) widget.onSubmit!();
-        Navigator.of(context).pop();
-      } else {
-        _showErrorSnackBar(result['message'] ?? "Failed to save police officer");
+      if (!mounted) return;
+
+      final isSuccess = result?['status'] == 'Success' || result?['status'] == true;
+      final message = result?['message'] ?? (isSuccess ? "Police officer saved successfully" : "Failed to save police officer");
+
+      _showSuccessSnackBar(message);
+
+      if (isSuccess) {
+        // Delay to show snackbar
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        if (mounted) {
+          if (widget.onSubmit != null) {
+            widget.onSubmit!();
+          }
+          Navigator.of(context).pop();
+        }
       }
     } catch (e) {
-      _showErrorSnackBar("Error saving police officer: $e");
+      if (mounted) {
+        _showErrorSnackBar("Error saving police officer: $e");
+      }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -242,7 +283,7 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 540,
+      height: 640,
       decoration: BoxDecoration(
         gradient: AppTheme.primaryGradient,
       ),
@@ -396,6 +437,26 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
                         prefixIcon: Icons.local_police,
                       ),
                       validator: (value) => value == null ? "Police station is required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    DropdownButtonFormField<String>(
+                      value: _selectedDepartmentUid,
+                      style: AppTheme.bodyLarge,
+                      items: _departments.map((dept) {
+                        return DropdownMenuItem<String>(
+                          value: dept['uid']?.toString(),
+                          child: Text(
+                            dept['name']?.toString() ?? 'Unknown Department',
+                            style: AppTheme.bodyLarge,
+                          ),
+                        );
+                      }).toList(),
+                      onChanged: (value) => setState(() => _selectedDepartmentUid = value),
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Department",
+                        prefixIcon: Icons.domain,
+                      ),
+                      validator: (value) => value == null ? "Department is required" : null,
                     ),
                   ],
                 ),

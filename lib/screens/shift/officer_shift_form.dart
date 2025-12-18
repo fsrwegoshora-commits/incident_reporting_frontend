@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../enum/enum.dart';
 import '../../services/graphql_service.dart';
 import '../../utils/graphql_query.dart';
 import '../../theme/app_theme.dart';
@@ -24,58 +25,56 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
         final _formKey = GlobalKey<FormState>();
         final _dutyDescriptionController = TextEditingController();
         DateTime? _shiftDate = DateTime.now();
-        String _shiftType = 'MORNING';
+        String _shiftTime = ShiftTimeEnum.MORNING;
+        String _shiftDutyType = ShiftDutyTypeEnum.STATION_DUTY;
         String? _selectedOfficerUid;
+        String? _selectedCheckpointUid;
         bool _isPunishmentMode = false;
         bool _isLoading = false;
         List<Map<String, dynamic>> _availableOfficers = [];
+        List<Map<String, dynamic>> _availableCheckpoints = [];
         Map<String, dynamic>? _existingOfficer;
         TimeOfDay? _startTime;
         TimeOfDay? _endTime;
-
-        // Predefined shift times
-        final Map<String, Map<String, TimeOfDay>> _shiftTimes = {
-                'MORNING': {
-                        'start': const TimeOfDay(hour: 6, minute: 0),
-                        'end': const TimeOfDay(hour: 14, minute: 0),
-                },
-                'EVENING': {
-                        'start': const TimeOfDay(hour: 14, minute: 0),
-                        'end': const TimeOfDay(hour: 22, minute: 0),
-                },
-                'NIGHT': {
-                        'start': const TimeOfDay(hour: 22, minute: 0),
-                        'end': const TimeOfDay(hour: 6, minute: 0),
-                },
-        };
 
         @override
         void initState() {
                 super.initState();
 
                 if (widget.existingShift != null) {
-                        _shiftDate = DateTime.parse(widget.existingShift!['shiftDate']);
-                        _shiftType = widget.existingShift!['shiftType'];
-                        _dutyDescriptionController.text = widget.existingShift!['dutyDescription'] ?? '';
-                        _isPunishmentMode = widget.existingShift!['isPunishmentMode'] ?? false;
-                        _selectedOfficerUid = widget.existingShift!['officer']?['uid'];
-                        if (widget.existingShift!['startTime'] != null) {
-                                _startTime = TimeOfDay.fromDateTime(DateFormat.Hm().parse(widget.existingShift!['startTime']));
-                        }
-                        if (widget.existingShift!['endTime'] != null) {
-                                _endTime = TimeOfDay.fromDateTime(DateFormat.Hm().parse(widget.existingShift!['endTime']));
-                        }
-
-                        _existingOfficer = {
-                                'uid': widget.existingShift!['officer']?['uid'],
-                                'badgeNumber': widget.existingShift!['officer']?['badgeNumber'],
-                                'userAccount': widget.existingShift!['officer']?['userAccount'],
-                        };
+                        _loadExistingShift();
                 } else {
-                        _updateShiftTimes(_shiftType);
+                        _updateShiftTimes(_shiftTime);
                 }
 
                 _fetchAvailableOfficers();
+                _fetchAvailableCheckpoints(); // ✅ IMPLEMENTED
+        }
+
+        void _loadExistingShift() {
+                final shift = widget.existingShift!;
+                _shiftDate = DateTime.parse(shift['shiftDate']);
+                _shiftTime = shift['shiftTime'] ?? ShiftTimeEnum.MORNING;
+                _shiftDutyType = shift['shiftDutyType'] ?? ShiftDutyTypeEnum.STATION_DUTY;
+                _dutyDescriptionController.text = shift['dutyDescription'] ?? '';
+                _isPunishmentMode = shift['isPunishmentMode'] ?? false;
+                _selectedOfficerUid = shift['officer']?['uid'];
+                _selectedCheckpointUid = shift['checkpointUid'];
+
+                if (shift['startTime'] != null) {
+                        _startTime = TimeOfDay.fromDateTime(DateFormat.Hm().parse(shift['startTime']));
+                }
+                if (shift['endTime'] != null) {
+                        _endTime = TimeOfDay.fromDateTime(DateFormat.Hm().parse(shift['endTime']));
+                }
+
+                _existingOfficer = {
+                        'uid': shift['officer']?['uid'],
+                        'badgeNumber': shift['officer']?['badgeNumber'],
+                        'userAccount': shift['officer']?['userAccount'],
+                };
+
+                _updateShiftTimes(_shiftTime);
         }
 
         @override
@@ -94,22 +93,7 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                 try {
                         final gql = GraphQLService();
                         final response = await gql.sendAuthenticatedQuery(
-                                """
-        query GetAvailableOfficersForSlot(\$date: String!, \$startTime: String!, \$endTime: String!) {
-          getAvailableOfficersForSlot(date: \$date, startTime: \$startTime, endTime: \$endTime) {
-            status
-            message
-            data {
-              uid
-              badgeNumber
-              userAccount {
-                name
-                phoneNumber
-              }
-            }
-          }
-        }
-        """,
+                                getAvailableOfficersForSlotQuery,
                                 {
                                         "date": DateFormat('yyyy-MM-dd').format(_shiftDate!),
                                         "startTime": "${_startTime!.hour.toString().padLeft(2, '0')}:${_startTime!.minute.toString().padLeft(2, '0')}",
@@ -118,7 +102,6 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                         );
 
                         if (response['errors'] != null) {
-                                print('GraphQL Errors: ${response['errors']}');
                                 throw Exception(response['errors'][0]['message']);
                         }
 
@@ -147,13 +130,48 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                 }
         }
 
-        void _updateShiftTimes(String? shiftType) {
-                if (shiftType != null && _shiftTimes.containsKey(shiftType)) {
+        // ✅ IMPLEMENTED: Fetch available checkpoints from backend
+        Future<void> _fetchAvailableCheckpoints() async {
+                try {
+                        final gql = GraphQLService();
+                        final response = await gql.sendAuthenticatedQuery(
+                                getTrafficCheckpointsQuery,
+                                {
+                                        "pageableParam": {
+                                                "page": 0,
+                                                "size": 100,
+                                                "sortBy": "name",
+                                                "sortDirection": "ASC",
+                                        }
+                                },
+                        );
+
+                        if (response['errors'] != null) {
+                                throw Exception(response['errors'][0]['message']);
+                        }
+
+                        final data = response['data']?['getTrafficCheckpoints'] ?? {};
                         setState(() {
-                                _startTime = _shiftTimes[shiftType]!['start'];
-                                _endTime = _shiftTimes[shiftType]!['end'];
+                                _availableCheckpoints = List<Map<String, dynamic>>.from(data['data'] ?? []);
+                                print("✅ Loaded ${_availableCheckpoints.length} checkpoints");
                         });
-                        _fetchAvailableOfficers();
+                } catch (e) {
+                        print("❌ Error fetching checkpoints: $e");
+                        _showModernSnackBar("Error loading checkpoints: $e", isSuccess: false);
+                        setState(() => _availableCheckpoints = []);
+                }
+        }
+
+        void _updateShiftTimes(String? shiftTime) {
+                if (shiftTime != null) {
+                        final timings = ShiftTimeEnum.getTimings()[shiftTime];
+                        if (timings != null) {
+                                setState(() {
+                                        _startTime = timings['start'];
+                                        _endTime = timings['end'];
+                                });
+                                _fetchAvailableOfficers();
+                        }
                 }
         }
 
@@ -163,6 +181,12 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                 _showModernSnackBar("Please select an officer", isSuccess: false);
                                 return;
                         }
+
+                        if (_shiftDutyType == ShiftDutyTypeEnum.CHECKPOINT_DUTY && _selectedCheckpointUid == null) {
+                                _showModernSnackBar("Please select a checkpoint for checkpoint duty", isSuccess: false);
+                                return;
+                        }
+
                         setState(() => _isLoading = true);
                         final gql = GraphQLService();
 
@@ -171,12 +195,14 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                         "dto": {
                                                 if (widget.existingShift != null) "uid": widget.existingShift!['uid'],
                                                 "shiftDate": DateFormat('yyyy-MM-dd').format(_shiftDate!),
-                                                "shiftType": _shiftType,
+                                                "shiftTime": _shiftTime,
+                                                "shiftDutyType": _shiftDutyType,
                                                 "dutyDescription": _dutyDescriptionController.text.trim(),
                                                 "isPunishmentMode": _isPunishmentMode,
                                                 "officerUid": _selectedOfficerUid,
                                                 "startTime": "${_startTime!.hour.toString().padLeft(2, '0')}:${_startTime!.minute.toString().padLeft(2, '0')}",
                                                 "endTime": "${_endTime!.hour.toString().padLeft(2, '0')}:${_endTime!.minute.toString().padLeft(2, '0')}",
+                                                if (_selectedCheckpointUid != null) "checkpointUid": _selectedCheckpointUid,
                                         },
                                 };
 
@@ -197,8 +223,11 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                                 result['message'] ?? "Shift saved successfully",
                                                 isSuccess: true,
                                         );
-                                        widget.onSubmit();
-                                        Navigator.pop(context);
+                                        await Future.delayed(const Duration(milliseconds: 500));
+                                        if (mounted) {
+                                                widget.onSubmit();
+                                                Navigator.pop(context);
+                                        }
                                 }
                         } catch (e) {
                                 print('Error saving shift: $e');
@@ -263,6 +292,7 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                 child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
+                                                // Shift Date
                                                 TextFormField(
                                                         initialValue: DateFormat('yyyy-MM-dd').format(_shiftDate!),
                                                         decoration: AppTheme.getInputDecoration(
@@ -285,46 +315,130 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                                         validator: (value) => value == null ? 'Please select a date' : null,
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceM),
+
+                                                // Shift Time (MORNING/EVENING/NIGHT)
                                                 DropdownButtonFormField<String>(
-                                                        value: _shiftType,
-                                                        items: ['MORNING', 'EVENING', 'NIGHT'].map((type) {
+                                                        value: _shiftTime,
+                                                        items: ShiftTimeEnum.values.map((time) {
                                                                 return DropdownMenuItem<String>(
-                                                                        value: type,
-                                                                        child: Text(type, overflow: TextOverflow.ellipsis),
+                                                                        value: time,
+                                                                        child: Text(ShiftTimeEnum.getLabel(time), overflow: TextOverflow.ellipsis),
                                                                 );
                                                         }).toList(),
                                                         onChanged: (value) {
-                                                                setState(() => _shiftType = value!);
+                                                                setState(() => _shiftTime = value!);
                                                                 _updateShiftTimes(value);
                                                         },
                                                         decoration: AppTheme.getInputDecoration(
-                                                                labelText: 'Shift Type',
-                                                                prefixIcon: Icons.timelapse,
+                                                                labelText: 'Shift Time Period',
+                                                                prefixIcon: Icons.schedule,
                                                         ),
-                                                        validator: (value) => value == null ? 'Please select a shift type' : null,
-                                                        isExpanded: true, // Ensure dropdown takes full width
+                                                        validator: (value) => value == null ? 'Please select a shift time' : null,
+                                                        isExpanded: true,
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceM),
+
+                                                // Start Time (Read-only)
                                                 TextFormField(
                                                         readOnly: true,
                                                         decoration: AppTheme.getInputDecoration(
                                                                 labelText: 'Start Time',
-                                                                hintText: _startTime?.format(context) ?? 'Select shift type',
+                                                                hintText: _startTime?.format(context) ?? 'Select shift time',
                                                                 prefixIcon: Icons.access_time,
                                                         ),
-                                                        validator: (value) => _startTime == null ? 'Please select a shift type' : null,
+                                                        validator: (value) => _startTime == null ? 'Please select a shift time' : null,
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceM),
+
+                                                // End Time (Read-only)
                                                 TextFormField(
                                                         readOnly: true,
                                                         decoration: AppTheme.getInputDecoration(
                                                                 labelText: 'End Time',
-                                                                hintText: _endTime?.format(context) ?? 'Select shift type',
+                                                                hintText: _endTime?.format(context) ?? 'Select shift time',
                                                                 prefixIcon: Icons.access_time,
                                                         ),
-                                                        validator: (value) => _endTime == null ? 'Please select a shift type' : null,
+                                                        validator: (value) => _endTime == null ? 'Please select a shift time' : null,
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceM),
+
+                                                // Shift Duty Type
+                                                DropdownButtonFormField<String>(
+                                                        value: _shiftDutyType,
+                                                        items: ShiftDutyTypeEnum.values.map((dutyType) {
+                                                                return DropdownMenuItem<String>(
+                                                                        value: dutyType,
+                                                                        child: Row(
+                                                                                children: [
+                                                                                        Icon(
+                                                                                                ShiftDutyTypeEnum.getIcon(dutyType),
+                                                                                                size: 18,
+                                                                                                color: ShiftDutyTypeEnum.getColor(dutyType),
+                                                                                        ),
+                                                                                        const SizedBox(width: 8),
+                                                                                        Text(
+                                                                                                ShiftDutyTypeEnum.getLabel(dutyType),
+                                                                                                overflow: TextOverflow.ellipsis,
+                                                                                        ),
+                                                                                ],
+                                                                        ),
+                                                                );
+                                                        }).toList(),
+                                                        onChanged: (value) => setState(() => _shiftDutyType = value!),
+                                                        decoration: AppTheme.getInputDecoration(
+                                                                labelText: 'Shift Duty Type',
+                                                                prefixIcon: Icons.work,
+                                                        ),
+                                                        validator: (value) => value == null ? 'Please select a duty type' : null,
+                                                        isExpanded: true,
+                                                ),
+                                                const SizedBox(height: AppTheme.spaceM),
+
+                                                // ✅ Checkpoint Selector (Show only if CHECKPOINT_DUTY) - NOW POPULATED
+                                                if (_shiftDutyType == ShiftDutyTypeEnum.CHECKPOINT_DUTY)
+                                                        Column(
+                                                                children: [
+                                                                        DropdownButtonFormField<String>(
+                                                                                value: _selectedCheckpointUid,
+                                                                                hint: const Text('Select a Checkpoint'),
+                                                                                items: _availableCheckpoints.map((checkpoint) {
+                                                                                        return DropdownMenuItem<String>(
+                                                                                                value: checkpoint['uid']?.toString(),
+                                                                                                child: Column(
+                                                                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                                                                        mainAxisAlignment: MainAxisAlignment.center,
+                                                                                                        children: [
+                                                                                                                Text(
+                                                                                                                        checkpoint['name'] ?? 'Unknown Checkpoint',
+                                                                                                                        overflow: TextOverflow.ellipsis,
+                                                                                                                        style: AppTheme.bodyMedium,
+                                                                                                                ),
+                                                                                                                if (checkpoint['parentStation']?['name'] != null)
+                                                                                                                        Text(
+                                                                                                                                checkpoint['parentStation']['name'],
+                                                                                                                                overflow: TextOverflow.ellipsis,
+                                                                                                                                style: AppTheme.bodySmall.copyWith(color: Colors.grey),
+                                                                                                                        ),
+                                                                                                        ],
+                                                                                                ),
+                                                                                        );
+                                                                                }).toList(),
+                                                                                onChanged: (value) => setState(() => _selectedCheckpointUid = value),
+                                                                                decoration: AppTheme.getInputDecoration(
+                                                                                        labelText: 'Checkpoint',
+                                                                                        prefixIcon: Icons.security,
+                                                                                ),
+                                                                                validator: (value) =>
+                                                                                _shiftDutyType == ShiftDutyTypeEnum.CHECKPOINT_DUTY && value == null
+                                                                                    ? 'Please select a checkpoint'
+                                                                                    : null,
+                                                                                isExpanded: true,
+                                                                        ),
+                                                                        const SizedBox(height: AppTheme.spaceM),
+                                                                ],
+                                                        ),
+
+                                                // Officer Selector
                                                 DropdownButtonFormField<String>(
                                                         value: _selectedOfficerUid,
                                                         hint: const Text('Select an Officer'),
@@ -354,11 +468,13 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                                                 prefixIcon: Icons.person,
                                                         ),
                                                         validator: (value) => value == null ? 'Please select an officer' : null,
-                                                        isExpanded: true, // Ensure dropdown takes full width
-                                                        dropdownColor: AppTheme.surfaceWhite, // Optional: Match theme
-                                                        menuMaxHeight: 300, // Limit dropdown height for scrolling
+                                                        isExpanded: true,
+                                                        dropdownColor: AppTheme.surfaceWhite,
+                                                        menuMaxHeight: 300,
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceM),
+
+                                                // Duty Description
                                                 TextFormField(
                                                         controller: _dutyDescriptionController,
                                                         decoration: AppTheme.getInputDecoration(
@@ -370,6 +486,8 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                                         validator: (value) => value == null || value.isEmpty ? 'Please enter a description' : null,
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceM),
+
+                                                // Punishment Mode
                                                 SwitchListTile(
                                                         value: _isPunishmentMode,
                                                         onChanged: (value) => setState(() => _isPunishmentMode = value),
@@ -379,50 +497,51 @@ class _OfficerShiftFormState extends State<OfficerShiftForm> {
                                                         shape: RoundedRectangleBorder(borderRadius: AppTheme.buttonRadius),
                                                 ),
                                                 const SizedBox(height: AppTheme.spaceXL),
-                                                _isLoading
-                                                    ? Container(
-                                                        width: 40,
-                                                        height: 40,
-                                                        decoration: BoxDecoration(
-                                                                gradient: AppTheme.primaryGradient,
-                                                                borderRadius: AppTheme.pillRadius,
-                                                        ),
-                                                        child: const Padding(
-                                                                padding: EdgeInsets.all(8.0),
-                                                                child: CircularProgressIndicator(
-                                                                        strokeWidth: 2,
-                                                                        valueColor: AlwaysStoppedAnimation<Color>(AppTheme.cardWhite),
+
+                                                // Submit Button
+                                                if (_isLoading)
+                                                        Container(
+                                                                width: 40,
+                                                                height: 40,
+                                                                decoration: BoxDecoration(
+                                                                        gradient: AppTheme.primaryGradient,
+                                                                        borderRadius: AppTheme.pillRadius,
                                                                 ),
-                                                        ),
-                                                )
-                                                    : Container(
-                                                        width: double.infinity,
-                                                        decoration: AppTheme.primaryButtonDecoration,
-                                                        child: Material(
-                                                                color: Colors.transparent,
-                                                                child: InkWell(
-                                                                        borderRadius: AppTheme.buttonRadius,
-                                                                        onTap: _submitForm,
-                                                                        child: Container(
-                                                                                padding: const EdgeInsets.symmetric(
-                                                                                        vertical: AppTheme.spaceM,
-                                                                                ),
-                                                                                child: Row(
-                                                                                        mainAxisSize: MainAxisSize.min,
-                                                                                        mainAxisAlignment: MainAxisAlignment.center,
-                                                                                        children: [
-                                                                                                Icon(Icons.save, color: AppTheme.cardWhite, size: 20),
-                                                                                                const SizedBox(width: AppTheme.spaceS),
-                                                                                                Text(
-                                                                                                        widget.existingShift == null ? 'Assign Shift' : 'Update Shift',
-                                                                                                        style: AppTheme.buttonTextMedium,
-                                                                                                ),
-                                                                                        ],
+                                                                child: const Padding(
+                                                                        padding: EdgeInsets.all(8.0),
+                                                                        child: CircularProgressIndicator(
+                                                                                strokeWidth: 2,
+                                                                                valueColor: AlwaysStoppedAnimation<Color>(AppTheme.cardWhite),
+                                                                        ),
+                                                                ),
+                                                        )
+                                                else
+                                                        Container(
+                                                                width: double.infinity,
+                                                                decoration: AppTheme.primaryButtonDecoration,
+                                                                child: Material(
+                                                                        color: Colors.transparent,
+                                                                        child: InkWell(
+                                                                                borderRadius: AppTheme.buttonRadius,
+                                                                                onTap: _submitForm,
+                                                                                child: Container(
+                                                                                        padding: const EdgeInsets.symmetric(vertical: AppTheme.spaceM),
+                                                                                        child: Row(
+                                                                                                mainAxisSize: MainAxisSize.min,
+                                                                                                mainAxisAlignment: MainAxisAlignment.center,
+                                                                                                children: [
+                                                                                                        Icon(Icons.save, color: AppTheme.cardWhite, size: 20),
+                                                                                                        const SizedBox(width: AppTheme.spaceS),
+                                                                                                        Text(
+                                                                                                                widget.existingShift == null ? 'Assign Shift' : 'Update Shift',
+                                                                                                                style: AppTheme.buttonTextMedium,
+                                                                                                        ),
+                                                                                                ],
+                                                                                        ),
                                                                                 ),
                                                                         ),
                                                                 ),
                                                         ),
-                                                ),
                                         ],
                                 ),
                         ),

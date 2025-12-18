@@ -63,18 +63,21 @@ query {
       isOnDuty
       officerUid  
       currentShift {
-        uid
-        shiftDate
-        startTime
-        endTime
-        shiftType
-        dutyDescription
-        isExcused
-        excuseReason
-        isPunishmentMode
-        isReassigned
-        reassignedFromUid
+          uid
+          officerUid
+          shiftDate
+          startTime
+          endTime
+          shiftTime
+          shiftDutyType
+          dutyDescription
+          isExcused
+          excuseReason
+          isPunishmentMode
+          isReassigned
+          checkpointUid
       }
+
     }
   }
 }
@@ -328,6 +331,11 @@ mutation SavePoliceOfficer(\$policeOfficerDto: PoliceOfficerDtoInput!) {
         name
         phoneNumber
       }
+      department{
+        uid
+        name
+        type
+      }
     }
   }
 }
@@ -349,6 +357,11 @@ query GetPoliceOfficer(\$uid: String!) {
         uid
         name
         phoneNumber
+      }
+      department{
+        uid
+        name
+        type
       }
     }
   }
@@ -380,6 +393,11 @@ String getPoliceOfficersQuery = """
           uid
           name
         }
+        department{
+        uid
+        name
+        type
+      }
       }
       elements
       pages
@@ -405,6 +423,11 @@ query GetPoliceOfficersByStation($pageableParam: PageableParamInput, $policeStat
         uid
         name
       }
+      department{
+        uid
+        name
+        type
+      }
     }
     page
     size
@@ -422,21 +445,29 @@ mutation SaveShift(\$dto: OfficerShiftDtoInput!) {
     status
     message
     data {
-      uid
-      shiftDate
-      shiftType
-      startTime
-      endTime
-      dutyDescription
-      isPunishmentMode
-      officer {
         uid
-        badgeNumber
-        userAccount {
+        shiftDate
+        shiftTime
+        shiftDutyType
+        startTime
+        endTime
+        dutyDescription
+        isPunishmentMode
+        isExcused
+        isReassigned
+        officer {
+          uid
+          badgeNumber
+          userAccount {
+            name
+          }
+        }
+        checkpoint {
+          uid
           name
-        } 
-      }
+        }
     }
+
   }
 }
 """;
@@ -461,22 +492,29 @@ mutation ReassignShift(\$uid: String!, \$newOfficerUid: String!) {
     status
     message
     data {
-      uid
-      shiftDate
-      shiftType
-      startTime
-      endTime
-      dutyDescription
-      isPunishmentMode
-      officer {
         uid
-        badgeNumber
-        userAccount {
-          name
-          phoneNumber
+        shiftDate
+        shiftTime
+        shiftDutyType
+        startTime
+        endTime
+        dutyDescription
+        isPunishmentMode
+        isExcused
+        isReassigned
+        officer {
+          uid
+          badgeNumber
+          userAccount {
+            name
+          }
         }
-      }
-    }
+        checkpoint {
+          uid
+          name
+        }
+     }
+
   }
 }
 """;
@@ -518,14 +556,51 @@ query GetAvailableOfficersForSlot(\$date: String!, \$startTime: String!, \$endTi
 
 
 const String getShiftsByStationQuery = """
-query GetShiftsByStation(\$stationUid: String!, \$page: Int!, \$size: Int!) {
-  getShiftsByStation(policeStationUid: \$stationUid, pageableParam: {page: \$page, size: \$size}) {
-    status
-    message
+query GetShiftsByStation(\$policeStationUid: String!, \$pageableParam: PageableParamInput!) {
+  getShiftsByStation(policeStationUid: \$policeStationUid, pageableParam: \$pageableParam) {
     data {
       uid
       shiftDate
-      shiftType
+      shiftTime
+      shiftDutyType
+      startTime
+      endTime
+      dutyDescription
+      isPunishmentMode
+      isExcused
+      excuseReason
+      isReassigned
+      officer {
+        uid
+        badgeNumber
+        userAccount {
+          uid
+          name
+          phoneNumber
+        }
+      }
+      checkpoint {
+        uid
+        name
+      }
+    }
+    elements
+    pages
+    size
+    page
+  }
+}
+""";
+
+
+const String getShiftsByOfficerQuery = """
+query GetShiftsByPoliceOfficer(\$policeOfficerUid: String!, \$pageableParam: PageableParamInput!) {
+  getShiftsByPoliceOfficer(policeOfficerUid: \$policeOfficerUid, pageableParam: \$pageableParam) {
+    data {
+      uid
+      shiftDate
+      shiftTime
+      shiftDutyType
       startTime
       endTime
       dutyDescription
@@ -537,29 +612,17 @@ query GetShiftsByStation(\$stationUid: String!, \$page: Int!, \$size: Int!) {
         badgeNumber
         userAccount {
           name
-          phoneNumber
         }
       }
+      checkpoint {
+        uid
+        name
+      }
     }
-  }
-}
-""";
-
-
-const String getShiftsByOfficerQuery = """
-query GetShiftsByPoliceOfficer(\$officerUid: String!, \$page: Int!, \$size: Int!) {
-  getShiftsByPoliceOfficer(policeOfficerUid: \$officerUid, pageableParam: {page: \$page, size: \$size}) {
-    status
-    message
-    data {
-      uid
-      shiftDate
-      shiftType
-      dutyDescription
-      isExcused
-      excuseReason
-      isPunishmentMode
-    }
+    elements
+    pages
+    size
+    page
   }
 }
 """;
@@ -582,22 +645,120 @@ query GetPoliceOfficerShifts(\$page: Int!, \$size: Int!) {
     status
     message
     data {
+        uid
+        shiftDate
+        shiftTime
+        shiftDutyType
+        startTime
+        endTime
+        dutyDescription
+        isPunishmentMode
+        isExcused
+        isReassigned
+        officer {
+          uid
+          badgeNumber
+          userAccount {
+            name
+          }
+        }
+        checkpoint {
+          uid
+          name
+        }
+      }
+  }
+}
+""";
+
+// GraphQL Query - Get Police Officer Shifts by Checkpoint
+
+const String getPoliceOfficerShiftsByCheckpointQuery = """
+query GetPoliceOfficerShiftsByCheckpoint(\$pageableParam: PageableParamInput, \$checkpointUid: String!) {
+  getPoliceOfficerShiftsByCheckpoint(pageableParam: \$pageableParam, checkpointUid: \$checkpointUid) {
+    data {
       uid
       shiftDate
-      shiftType
-      isExcused
+      shiftTime
+      shiftDutyType
+      startTime
+      endTime
       dutyDescription
-      excuseReason
       isPunishmentMode
+      isExcused
+      isReassigned
       officer {
         uid
         badgeNumber
-         userAccount {
+        userAccount {
+          uid
           name
           phoneNumber
         }
       }
+      checkpoint {
+        uid
+        name
+        contactPhone
+      }
     }
+    elements
+    pages
+    size
+    page
+  }
+}
+""";
+
+// Alternative version with full details
+const String getPoliceOfficerShiftsByCheckpointDetailedQuery = """
+query GetPoliceOfficerShiftsByCheckpoint(\$pageableParam: PageableParamInput, \$checkpointUid: String!) {
+  getPoliceOfficerShiftsByCheckpoint(pageableParam: \$pageableParam, checkpointUid: \$checkpointUid) {
+    data {
+      uid
+      shiftDate
+      shiftTime
+      shiftDutyType
+      startTime
+      endTime
+      dutyDescription
+      isPunishmentMode
+      isExcused
+      isReassigned
+      officer {
+        uid
+        badgeNumber
+        code
+        userAccount {
+          uid
+          name
+          phoneNumber
+          email
+        }
+        station {
+          uid
+          name
+        }
+        department {
+          uid
+          name
+        }
+      }
+      checkpoint {
+        uid
+        name
+        contactPhone
+        location {
+          latitude
+          longitude
+          address
+        }
+      }
+    }
+    elements
+    pages
+    size
+    page
   }
 }
 """;
@@ -607,23 +768,115 @@ query GetPoliceOfficerShift(\$uid: String!) {
   getPoliceOfficerShift(uid: \$uid) {
     status
     message
+   data {
+          uid
+          shiftDate
+          shiftTime
+          shiftDutyType
+          startTime
+          endTime
+          dutyDescription
+          isPunishmentMode
+          isExcused
+          isReassigned
+          officer {
+            uid
+            badgeNumber
+            userAccount {
+              name
+            }
+          }
+          checkpoint {
+            uid
+            name
+          }
+   }
+  }
+}
+""";
+
+const String assignCheckpointShiftBulkMutation = """
+mutation AssignCheckpointShiftBulk(\$bulkCheckpointShiftDto: BulkCheckpointShiftDtoInput!) {
+  assignCheckpointShiftBulk(bulkCheckpointShiftDto: \$bulkCheckpointShiftDto) {
+    status
+    message
     data {
       uid
+      officerUid
       shiftDate
-      shiftType
+      shiftTime
+      shiftDutyType
+      startTime
+      endTime
       dutyDescription
+      isPunishmentMode
       isExcused
       excuseReason
-      isPunishmentMode
+      isReassigned
+      checkpointUid
       officer {
         uid
         badgeNumber
         userAccount {
+          uid
           name
           phoneNumber
         }
       }
+      checkpoint {
+        uid
+        name
+      }
     }
+  }
+}
+""";
+
+const String getCheckpointShiftsByDateRangeQuery = """
+query GetCheckpointShiftsByDateRange(
+  \$checkpointUid: String!, 
+  \$startDate: LocalDate!, 
+  \$endDate: LocalDate!, 
+  \$pageableParam: PageableParamInput
+) {
+  getCheckpointShiftsByDateRange(
+    checkpointUid: \$checkpointUid, 
+    startDate: \$startDate, 
+    endDate: \$endDate, 
+    pageableParam: \$pageableParam
+  ) {
+    data {
+      uid
+      officerUid
+      shiftDate
+      shiftTime
+      shiftDutyType
+      startTime
+      endTime
+      dutyDescription
+      isPunishmentMode
+      isExcused
+      excuseReason
+      isReassigned
+      checkpointUid
+      officer {
+        uid
+        badgeNumber
+        userAccount {
+          uid
+          name
+          phoneNumber
+        }
+      }
+      checkpoint {
+        uid
+        name
+      }
+    }
+    elements
+    pages
+    size
+    page
   }
 }
 """;
@@ -1314,4 +1567,217 @@ const String getDepartmentsQuery = """
       page
     }
   }
+""";
+// ============================================================================
+// CHECK POINT QUERIES
+// ============================================================================
+
+const String saveTrafficCheckpointMutation = """
+mutation SaveTrafficCheckpoint(\$trafficCheckPointDto: TrafficCheckPointDtoInput!) {
+  saveTrafficCheckpoint(trafficCheckPointDto: \$trafficCheckPointDto) {
+    status
+    message
+    data {
+      uid
+      name
+      contactPhone
+      coverageRadiusKm
+      active
+      location {
+        latitude
+        longitude
+        address
+      }
+      parentStation {
+        uid
+        name
+      }
+      department {
+        uid
+        name
+      }
+      supervisingOfficer {
+        uid
+        badgeNumber
+        code
+        userAccount{
+          phoneNumber
+          name
+        }
+      }
+    }
+  }
+}
+""";
+
+const String getTrafficCheckpointQuery = """
+query GetTrafficCheckpoint(\$uid: String!) {
+  getTrafficCheckpoint(uid: \$uid) {
+    status
+    message
+    data {
+      uid
+      name
+      contactPhone
+      coverageRadiusKm
+      active
+      location {
+        latitude
+        longitude
+        address
+      }
+      parentStation {
+        uid
+        name
+      }
+      department {
+        uid
+        name
+      }
+      supervisingOfficer {
+        uid
+        badgeNumber
+        code
+        userAccount{
+          phoneNumber
+          name
+        }
+      }
+    }
+  }
+}
+""";
+
+const String deleteTrafficCheckpointMutation = """
+mutation DeleteTrafficCheckpoint(\$uid: String!) {
+  deleteTrafficCheckpoint(uid: \$uid) {
+    status
+    message
+  }
+}
+""";
+
+const String getTrafficCheckpointsQuery = """
+query GetTrafficCheckpoints(\$pageableParam: PageableParamInput) {
+  getTrafficCheckpoints(pageableParam: \$pageableParam) {
+    data {
+      uid
+      name
+      contactPhone
+      coverageRadiusKm
+      active
+      location {
+        latitude
+        longitude
+        address
+      }
+      parentStation {
+        uid
+        name
+      }
+      department {
+        uid
+        name
+      }
+      supervisingOfficer {
+        uid
+        badgeNumber
+        code
+        userAccount{
+          phoneNumber
+          name
+        }
+      }
+    }
+    elements
+    pages
+    size
+    page
+  }
+}
+""";
+
+const String assignSupervisorMutation = """
+mutation AssignSupervisor(\$checkpointUid: String!, \$officerUid: String!) {
+  assignSupervisor(checkpointUid: \$checkpointUid, officerUid: \$officerUid) {
+    status
+    message
+    data {
+      uid
+      name
+      supervisingOfficer {
+        uid
+        badgeNumber
+        code
+        userAccount{
+          phoneNumber
+          name
+        }
+      }
+    }
+  }
+}
+""";
+
+const String changeSupervisorMutation = """
+mutation ChangeSupervisor(\$checkpointUid: String!, \$newOfficerUid: String!) {
+  changeSupervisor(checkpointUid: \$checkpointUid, officerUid: \$newOfficerUid) {
+    status
+    message
+    data {
+      uid
+      name
+      supervisingOfficer {
+        uid
+        badgeNumber
+        code
+        userAccount{
+          phoneNumber
+          name
+        }
+      }
+    }
+  }
+}
+""";
+
+// GraphQL Query - Get Traffic Checkpoints by Police Station
+
+const String getTrafficCheckpointsByPoliceStationQuery = """
+query GetTrafficCheckpointsByPoliceStation(\$pageableParam: PageableParamInput, \$stationUid: String!) {
+  getTrafficCheckpointsByPoliceStation(pageableParam: \$pageableParam, stationUid: \$stationUid) {
+    data {
+      uid
+      name
+      contactPhone
+      coverageRadiusKm
+      active
+      location {
+        latitude
+        longitude
+        address
+      }
+      parentStation {
+        uid
+        name
+      }
+      department {
+        uid
+        name
+      }
+      supervisingOfficer {
+        uid
+        userAccount {
+          name
+          phoneNumber
+        }
+        badgeNumber
+      }
+    }
+    elements
+    pages
+    size
+    page
+  }
+}
 """;

@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:incident_reporting_frontend/screens/station/police_station_form.dart';
 import 'package:incident_reporting_frontend/screens/police/police_officers_by_station_screen.dart';
+import 'package:incident_reporting_frontend/screens/station/traffic_checkpoints_by_station_screen.dart';
 import '../../services/graphql_service.dart';
 import '../../utils/graphql_query.dart';
 import '../../theme/app_theme.dart';
@@ -600,6 +601,7 @@ class _PoliceStationManagementScreenState extends State<PoliceStationManagementS
                         ],
                       ),
                       const SizedBox(height: 20),
+                      // Action Buttons - Updated with Traffic Checkpoints
                       Row(
                         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
@@ -618,6 +620,22 @@ class _PoliceStationManagementScreenState extends State<PoliceStationManagementS
                                 context,
                                 MaterialPageRoute(
                                   builder: (context) => PoliceOfficersByStationScreen(
+                                    stationUid: stationUid,
+                                    stationName: stationName,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                          _buildStationActionButton(
+                            icon: Icons.traffic_rounded,
+                            label: 'Checkpoints',
+                            color: Color(0xFFFF9800),
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => TrafficCheckpointsByStationScreen(
                                     stationUid: stationUid,
                                     stationName: stationName,
                                   ),
@@ -1288,9 +1306,10 @@ class _ModernButton extends StatelessWidget {
 
     return Container(
       decoration: BoxDecoration(
-        gradient: gradient ?? LinearGradient(
-          colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
-        ),
+        gradient: gradient ??
+            LinearGradient(
+              colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+            ),
         borderRadius: BorderRadius.circular(15),
         boxShadow: [
           BoxShadow(
@@ -1318,11 +1337,12 @@ class _ModernButton extends StatelessWidget {
                   Icon(icon, color: Colors.white, size: 20),
                   const SizedBox(width: 8),
                 ],
-                Text(text, style: TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white,
-                )),
+                Text(text,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    )),
               ],
             ),
           ),

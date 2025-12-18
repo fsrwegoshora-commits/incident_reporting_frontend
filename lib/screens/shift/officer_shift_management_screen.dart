@@ -1,9 +1,9 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../enum/enum.dart';
 import '../../services/graphql_service.dart';
 import '../../utils/graphql_query.dart';
-import '../../theme/app_theme.dart';
 import 'officer_shift_form.dart';
 
 class OfficerShiftManagementScreen extends StatefulWidget {
@@ -36,6 +36,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
         bool _isLoading = false;
         String _searchQuery = '';
         final TextEditingController _searchController = TextEditingController();
+        String _filterDutyType = ''; // For filtering by duty type
 
         @override
         void initState() {
@@ -83,7 +84,8 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                 final startTimeStr = shift['startTime'] ?? '06:00';
                 final endTimeStr = shift['endTime'] ?? '14:00';
                 final isExcused = shift['isExcused'] ?? false;
-                final shiftType = shift['shiftType'] ?? 'N/A';
+                final shiftDutyType = shift['shiftDutyType'] ?? ShiftDutyTypeEnum.STATION_DUTY;
+                final shiftTime = shift['shiftTime'] ?? ShiftTimeEnum.MORNING;
 
                 final startTime = DateFormat.Hm().parse(startTimeStr);
                 final endTime = DateFormat.Hm().parse(endTimeStr);
@@ -107,16 +109,21 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                     shiftDate.month == now.month &&
                     shiftDate.day == now.day;
 
+                // Check for OFF duty type
+                if (shiftDutyType == ShiftDutyTypeEnum.OFF) {
+                        return 'OFF';
+                }
+
                 if (isExcused) {
                         return 'EXCUSED (${shift['excuseReason'] ?? 'No reason'})';
                 }
 
                 if (isToday && now.isBefore(shiftStart)) {
-                        return 'Scheduled for $shiftType ($startTimeStr - $endTimeStr)';
+                        return 'Scheduled for ${ShiftTimeEnum.getLabel(shiftTime)}';
                 }
 
                 if (now.isAfter(shiftEnd)) {
-                        return 'OFF';
+                        return 'COMPLETED';
                 } else if (now.isAfter(shiftStart) && now.isBefore(shiftEnd)) {
                         final remainingMinutes = shiftEnd.difference(now).inMinutes;
                         final hours = remainingMinutes ~/ 60;
@@ -138,12 +145,15 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
 
                 try {
                         final response = await gql.sendAuthenticatedQuery(getShiftsByStationQuery, {
-                                "stationUid": widget.stationUid,
-                                "page": _currentPage,
-                                "size": _pageSize,
+                                "policeStationUid": widget.stationUid,
+                                "pageableParam": {
+                                        "page": _currentPage,
+                                        "size": _pageSize,
+                                        "isActive": true,
+                                        "sortBy": "shiftDate",
+                                        "sortDirection": "DESC",
+                                }
                         });
-
-                        print('Full shifts response: ${json.encode(response)}');
 
                         if (response['errors'] != null) {
                                 throw Exception(response['errors'][0]['message']);
@@ -168,10 +178,6 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                 totalElements = data['totalElements'] ?? shifts.length;
                                 totalPages = data['totalPages'] ?? 1;
                         }
-
-                        print('Parsed shifts: $shifts');
-                        print('Total elements: $totalElements');
-                        print('Total pages: $totalPages');
 
                         setState(() => _hasMore = _currentPage < totalPages - 1 && shifts.isNotEmpty);
 
@@ -202,6 +208,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                         _hasMore = true;
                         _searchQuery = '';
                         _searchController.clear();
+                        _filterDutyType = '';
                 });
                 shiftsResponse = _fetchShifts();
                 _animationController.reset();
@@ -209,7 +216,10 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
         }
 
         Future<void> _deleteShift(String uid) async {
-                final confirm = await _showModernDialog('Confirm Deletion', 'Are you sure you want to delete this shift? This action cannot be undone.');
+                final confirm = await _showModernDialog(
+                        'Confirm Deletion',
+                        'Are you sure you want to delete this shift? This action cannot be undone.',
+                );
 
                 if (confirm == true) {
                         try {
@@ -236,7 +246,6 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
 
         Future<void> _excuseShift(String shiftId, bool isExcused) async {
                 String? excuseReason;
-                print('Excuse shift called for shiftId: $shiftId, isExcused: $isExcused');
 
                 await showDialog<void>(
                         context: context,
@@ -344,9 +353,9 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                                                                         child: _ModernButton(
                                                                                                                 text: isExcused ? 'Remove' : 'Confirm',
                                                                                                                 onPressed: () {
-                                                                                                                        if (isExcused || excuseReason != null && excuseReason!.isNotEmpty) {
+                                                                                                                        if (isExcused || (excuseReason != null && excuseReason!.isNotEmpty)) {
                                                                                                                                 Navigator.of(context).pop();
-                                                                                                                                print('Excuse action: shiftId=$shiftId, isExcused=$isExcused, reason=$excuseReason');
+                                                                                                                                _submitExcuseShift(shiftId, excuseReason ?? '');
                                                                                                                         }
                                                                                                                 },
                                                                                                                 gradient: LinearGradient(
@@ -365,6 +374,31 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                 ),
                         ),
                 );
+        }
+
+        Future<void> _submitExcuseShift(String shiftId, String reason) async {
+                try {
+                        final response = await gql.sendAuthenticatedMutation(excuseShiftMutation, {
+                                "uid": shiftId,
+                                "reason": reason,
+                        });
+
+                        if (response['errors'] != null) {
+                                throw Exception(response['errors'][0]['message']);
+                        }
+
+                        final result = response['data']?['excuseShift'];
+                        final message = result?['message'] ?? "Excuse failed";
+
+                        _showModernSnackBar(
+                                message,
+                                isSuccess: result?['status'] == 'Success',
+                        );
+
+                        _refreshList();
+                } catch (e) {
+                        _showModernSnackBar("Error: $e", isSuccess: false);
+                }
         }
 
         Future<void> _reassignShift(String uid, String shiftDate, String startTime, String endTime) async {
@@ -406,22 +440,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
         Future<List<Map<String, dynamic>>> _fetchAvailableOfficers(String date, String startTime, String endTime) async {
                 try {
                         final response = await gql.sendAuthenticatedQuery(
-                                """
-        query GetAvailableOfficersForSlot(\$date: String!, \$startTime: String!, \$endTime: String!) {
-          getAvailableOfficersForSlot(date: \$date, startTime: \$startTime, endTime: \$endTime) {
-            status
-            message
-            data {
-              uid
-              badgeNumber
-              userAccount {
-                name
-                phoneNumber
-              }
-            }
-          }
-        }
-        """,
+                                getAvailableOfficersForSlotQuery,
                                 {
                                         "date": date,
                                         "startTime": startTime,
@@ -442,120 +461,8 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                 }
         }
 
-        Future<String?> _showReasonDialog(String title, String message) async {
-                final controller = TextEditingController();
-                return showDialog<String>(
-                        context: context,
-                        barrierDismissible: false,
-                        builder: (context) => TweenAnimationBuilder<double>(
-                                duration: const Duration(milliseconds: 800),
-                                tween: Tween(begin: 0.0, end: 1.0),
-                                builder: (context, value, child) => Transform.scale(
-                                        scale: value,
-                                        child: AlertDialog(
-                                                backgroundColor: Colors.white,
-                                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-                                                elevation: 0,
-                                                content: Container(
-                                                        decoration: BoxDecoration(
-                                                                color: Color(0xFFF8F9FC),
-                                                                borderRadius: BorderRadius.circular(20),
-                                                                boxShadow: [
-                                                                        BoxShadow(
-                                                                                color: Color(0xFF2E5BFF).withOpacity(0.1),
-                                                                                blurRadius: 20,
-                                                                                offset: Offset(0, 10),
-                                                                        ),
-                                                                ],
-                                                        ),
-                                                        padding: const EdgeInsets.all(20),
-                                                        child: Column(
-                                                                mainAxisSize: MainAxisSize.min,
-                                                                children: [
-                                                                        Container(
-                                                                                width: 60,
-                                                                                height: 60,
-                                                                                decoration: BoxDecoration(
-                                                                                        gradient: LinearGradient(
-                                                                                                colors: [Color(0xFFFFA726), Color(0xFFFF8F00)],
-                                                                                        ),
-                                                                                        borderRadius: BorderRadius.circular(15),
-                                                                                ),
-                                                                                child: const Icon(
-                                                                                        Icons.note_add_rounded,
-                                                                                        color: Colors.white,
-                                                                                        size: 32,
-                                                                                ),
-                                                                        ),
-                                                                        const SizedBox(height: 20),
-                                                                        Text(
-                                                                                title,
-                                                                                style: TextStyle(
-                                                                                        fontSize: 18,
-                                                                                        fontWeight: FontWeight.w700,
-                                                                                        color: Color(0xFF1A1F36),
-                                                                                ),
-                                                                                textAlign: TextAlign.center,
-                                                                        ),
-                                                                        const SizedBox(height: 12),
-                                                                        Text(
-                                                                                message,
-                                                                                style: TextStyle(
-                                                                                        fontSize: 14,
-                                                                                        color: Color(0xFF8F9BB3),
-                                                                                ),
-                                                                                textAlign: TextAlign.center,
-                                                                        ),
-                                                                        const SizedBox(height: 12),
-                                                                        TextField(
-                                                                                controller: controller,
-                                                                                decoration: InputDecoration(
-                                                                                        labelText: 'Reason',
-                                                                                        hintText: 'Enter excuse reason',
-                                                                                        prefixIcon: Icon(Icons.note, color: Color(0xFF2E5BFF)),
-                                                                                        filled: true,
-                                                                                        fillColor: Color(0xFFF5F7FA),
-                                                                                        border: OutlineInputBorder(
-                                                                                                borderRadius: BorderRadius.circular(12),
-                                                                                                borderSide: BorderSide.none,
-                                                                                        ),
-                                                                                ),
-                                                                                maxLines: 3,
-                                                                        ),
-                                                                        const SizedBox(height: 20),
-                                                                        Row(
-                                                                                children: [
-                                                                                        Expanded(
-                                                                                                child: _ModernButton(
-                                                                                                        text: 'Cancel',
-                                                                                                        onPressed: () => Navigator.of(context).pop(null),
-                                                                                                        isOutlined: true,
-                                                                                                ),
-                                                                                        ),
-                                                                                        const SizedBox(width: 12),
-                                                                                        Expanded(
-                                                                                                child: _ModernButton(
-                                                                                                        text: 'Submit',
-                                                                                                        onPressed: () => Navigator.of(context).pop(controller.text.trim()),
-                                                                                                        gradient: LinearGradient(
-                                                                                                                colors: [Color(0xFFFFA726), Color(0xFFFF8F00)],
-                                                                                                        ),
-                                                                                                ),
-                                                                                        ),
-                                                                                ],
-                                                                        ),
-                                                                ],
-                                                        ),
-                                                ),
-                                        ),
-                                ),
-                        ),
-                );
-        }
-
         Future<String?> _showReassignDialog(List<Map<String, dynamic>> availableOfficers) async {
                 String? selectedUid;
-                print('Available officers: ${json.encode(availableOfficers)}');
 
                 return showDialog<String>(
                         context: context,
@@ -884,7 +791,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                                 child: ClipRRect(
                                                                         borderRadius: BorderRadius.circular(20),
                                                                         child: SizedBox(
-                                                                                height: 600,
+                                                                                height: 650,
                                                                                 child: Column(
                                                                                         children: [
                                                                                                 Container(
@@ -997,38 +904,116 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                 );
         }
 
+        Widget _buildDutyTypeFilter() {
+                return Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 20),
+                        child: SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                        children: [
+                                                _buildFilterChip('All', '', null),
+                                                ...ShiftDutyTypeEnum.values.map((dutyType) {
+                                                        return _buildFilterChip(
+                                                                ShiftDutyTypeEnum.getLabel(dutyType),
+                                                                dutyType,
+                                                                ShiftDutyTypeEnum.getColor(dutyType),
+                                                        );
+                                                }).toList(),
+                                        ],
+                                ),
+                        ),
+                );
+        }
+
+        Widget _buildFilterChip(String label, String value, Color? color) {
+                final isSelected = _filterDutyType == value;
+
+                return GestureDetector(
+                        onTap: () => setState(() => _filterDutyType = value),
+                        child: Container(
+                                margin: const EdgeInsets.only(right: 8),
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                decoration: BoxDecoration(
+                                        color: isSelected ? (color ?? Color(0xFF2E5BFF)) : Colors.white,
+                                        border: Border.all(
+                                                color: color ?? Color(0xFF2E5BFF),
+                                                width: isSelected ? 0 : 1,
+                                        ),
+                                        borderRadius: BorderRadius.circular(20),
+                                        boxShadow: isSelected
+                                            ? [
+                                                BoxShadow(
+                                                        color: (color ?? Color(0xFF2E5BFF)).withOpacity(0.3),
+                                                        blurRadius: 8,
+                                                        offset: Offset(0, 2),
+                                                )
+                                        ]
+                                            : [],
+                                ),
+                                child: Text(
+                                        label,
+                                        style: TextStyle(
+                                                fontSize: 12,
+                                                fontWeight: FontWeight.w600,
+                                                color: isSelected ? Colors.white : (color ?? Color(0xFF2E5BFF)),
+                                        ),
+                                ),
+                        ),
+                );
+        }
+
         List<Map<String, dynamic>> _filterShifts(List<Map<String, dynamic>> shifts) {
-                if (_searchQuery.isEmpty) return shifts;
+                if (_searchQuery.isEmpty && _filterDutyType.isEmpty) return shifts;
 
                 return shifts.where((shift) {
-                        final officerName = shift['officer']?['userAccount']?['name']?.toString().toLowerCase() ?? '';
-                        final badgeNumber = shift['officer']?['badgeNumber']?.toString().toLowerCase() ?? '';
-                        final shiftDate = shift['shiftDate']?.toString().toLowerCase() ?? '';
-                        final shiftType = shift['shiftType']?.toString().toLowerCase() ?? '';
-                        final dutyDescription = shift['dutyDescription']?.toString().toLowerCase() ?? '';
-                        final startTime = shift['startTime']?.toString().toLowerCase() ?? '';
-                        final endTime = shift['endTime']?.toString().toLowerCase() ?? '';
-                        final excuseReason = shift['excuseReason']?.toString().toLowerCase() ?? '';
-                        final query = _searchQuery.toLowerCase();
+                        // Apply duty type filter
+                        if (_filterDutyType.isNotEmpty) {
+                                final shiftDutyType = shift['shiftDutyType']?.toString() ?? '';
+                                if (shiftDutyType != _filterDutyType) {
+                                        return false;
+                                }
+                        }
 
-                        return officerName.contains(query) ||
-                            badgeNumber.contains(query) ||
-                            shiftDate.contains(query) ||
-                            shiftType.contains(query) ||
-                            dutyDescription.contains(query) ||
-                            startTime.contains(query) ||
-                            endTime.contains(query) ||
-                            excuseReason.contains(query);
+                        // Apply search query
+                        if (_searchQuery.isNotEmpty) {
+                                final officerName = shift['officer']?['userAccount']?['name']?.toString().toLowerCase() ?? '';
+                                final badgeNumber = shift['officer']?['badgeNumber']?.toString().toLowerCase() ?? '';
+                                final shiftDate = shift['shiftDate']?.toString().toLowerCase() ?? '';
+                                final shiftTime = shift['shiftTime']?.toString().toLowerCase() ?? '';
+                                final shiftDutyType = shift['shiftDutyType']?.toString().toLowerCase() ?? '';
+                                final dutyTypeLabel = ShiftDutyTypeEnum.getLabel(shift['shiftDutyType'] ?? 'STATION_DUTY')
+                                    .toLowerCase();
+                                final dutyDescription = shift['dutyDescription']?.toString().toLowerCase() ?? '';
+                                final startTime = shift['startTime']?.toString().toLowerCase() ?? '';
+                                final endTime = shift['endTime']?.toString().toLowerCase() ?? '';
+                                final excuseReason = shift['excuseReason']?.toString().toLowerCase() ?? '';
+                                final checkpointName = shift['checkpoint']?['name']?.toString().toLowerCase() ?? '';
+                                final query = _searchQuery.toLowerCase();
+
+                                return officerName.contains(query) ||
+                                    badgeNumber.contains(query) ||
+                                    shiftDate.contains(query) ||
+                                    shiftTime.contains(query) ||
+                                    shiftDutyType.contains(query) ||
+                                    dutyTypeLabel.contains(query) ||
+                                    dutyDescription.contains(query) ||
+                                    startTime.contains(query) ||
+                                    endTime.contains(query) ||
+                                    excuseReason.contains(query) ||
+                                    checkpointName.contains(query);
+                        }
+
+                        return true;
                 }).toList();
         }
 
         Widget _buildShiftCard(Map<String, dynamic> shift, int index) {
-                print('Building shift card $index: ${json.encode(shift)}');
-
                 final officerName = shift['officer']?['userAccount']?['name']?.toString() ?? 'Unknown Officer';
                 final badgeNumber = shift['officer']?['badgeNumber']?.toString() ?? 'N/A';
                 final shiftDate = shift['shiftDate']?.toString() ?? 'N/A';
-                final shiftType = shift['shiftType']?.toString() ?? 'N/A';
+                final shiftDutyType = shift['shiftDutyType']?.toString() ?? ShiftDutyTypeEnum.STATION_DUTY;
+                final dutyTypeColor = ShiftDutyTypeEnum.getColor(shiftDutyType);
+                final dutyTypeIcon = ShiftDutyTypeEnum.getIcon(shiftDutyType);
                 final dutyDescription = shift['dutyDescription']?.toString() ?? 'No description';
                 final isPunishmentMode = shift['isPunishmentMode']?.toString() == 'true' || false;
                 final startTime = shift['startTime']?.toString() ?? '06:00';
@@ -1036,7 +1021,8 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                 final shiftStatus = _calculateShiftStatus(shift);
                 final isExcused = shift['isExcused']?.toString() == 'true' || false;
                 final excuseReason = shift['excuseReason']?.toString() ?? '';
-                final isButtonDisabled = shiftStatus.contains('OFF') || shiftStatus.contains('EXCUSED');
+                final isButtonDisabled = shiftStatus.contains('OFF') || shiftStatus.contains('COMPLETED');
+                final shiftTime = shift['shiftTime'] ?? ShiftTimeEnum.MORNING;
 
                 Color getCardBackgroundColor() {
                         if (isPunishmentMode) {
@@ -1044,7 +1030,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                         } else if (isExcused) {
                                 return Color(0xFFFFECB3).withOpacity(0.08);
                         } else {
-                                return Color(0xBBDEFB).withOpacity(0.08);
+                                return dutyTypeColor.withOpacity(0.08);
                         }
                 }
 
@@ -1052,8 +1038,8 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                         if (isPunishmentMode) {
                                 return LinearGradient(
                                         colors: [
-                                                Color(0xFFFF6B6B).withOpacity(0.8),
-                                                Color(0xFFFF6B6B),
+                                                Color(0xFFFFCDD2).withOpacity(0.8),
+                                                Color(0xFFFFCDD2),
                                         ],
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
@@ -1061,7 +1047,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                         } else if (isExcused) {
                                 return LinearGradient(
                                         colors: [
-                                                Color(0xFFFFA726).withOpacity(0.8),
+                                                Color(0xFFFFECB3).withOpacity(0.8),
                                                 Color(0xFFFFA726),
                                         ],
                                         begin: Alignment.topLeft,
@@ -1070,8 +1056,8 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                         } else {
                                 return LinearGradient(
                                         colors: [
-                                                Color(0xFF2E5BFF).withOpacity(0.8),
-                                                Color(0xFF2E5BFF),
+                                                dutyTypeColor.withOpacity(0.8),
+                                                dutyTypeColor,
                                         ],
                                         begin: Alignment.topLeft,
                                         end: Alignment.bottomRight,
@@ -1082,268 +1068,305 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                 IconData getHeroIcon() {
                         if (isPunishmentMode) return Icons.warning_rounded;
                         if (isExcused) return Icons.event_busy_rounded;
-                        return Icons.schedule_rounded;
+                        return dutyTypeIcon;
                 }
 
                 return ConstrainedBox(
-                    constraints: BoxConstraints(
-                            minHeight: 120.0,
-                            maxWidth: MediaQuery.of(context).size.width - 32,
-                    ),
-                    child: FadeTransition(
-                            opacity: _fadeAnimation,
-                            child: Transform.translate(
-                                    offset: Offset(0, _slideAnimation.value * (index + 1)),
-                                    child: Container(
-                                            margin: EdgeInsets.only(
-                                                    left: 20,
-                                                    right: 20,
-                                                    bottom: 20,
-                                                    top: index == 0 ? 10 : 0,
-                                            ),
-                                            decoration: BoxDecoration(
-                                                    color: getCardBackgroundColor(),
-                                                    borderRadius: BorderRadius.circular(20),
-                                                    border: Border.all(
-                                                            color: isPunishmentMode
-                                                                ? Color(0xFFFF6B6B).withOpacity(0.2)
-                                                                : isExcused
-                                                                ? Color(0xFFFFA726).withOpacity(0.2)
-                                                                : Color(0xFF2E5BFF).withOpacity(0.2),
-                                                            width: 1,
-                                                    ),
-                                                    boxShadow: [
-                                                            BoxShadow(
-                                                                    color: Colors.black.withOpacity(0.05),
-                                                                    blurRadius: 8,
-                                                                    offset: const Offset(0, 2),
-                                                            ),
-                                                    ],
-                                            ),
-                                            child: Material(
-                                                    color: Colors.transparent,
-                                                    child: InkWell(
-                                                            borderRadius: BorderRadius.circular(20),
-                                                            onTap: isButtonDisabled ? null : () => _showShiftForm(existingShift: shift),
-                                                            child: Padding(
-                                                                    padding: const EdgeInsets.all(20),
-                                                                    child: Column(
-                                                                            children: [
-                                                                                    Row(
-                                                                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                                                                            children: [
-                                                                                                    Container(
-                                                                                                            width: 56,
-                                                                                                            height: 56,
-                                                                                                            decoration: BoxDecoration(
-                                                                                                                    gradient: getHeroGradient(),
-                                                                                                                    borderRadius: BorderRadius.circular(12),
-                                                                                                                    boxShadow: [
-                                                                                                                            BoxShadow(
-                                                                                                                                    color: (isPunishmentMode
-                                                                                                                                        ? Color(0xFFFF6B6B)
-                                                                                                                                        : isExcused
-                                                                                                                                        ? Color(0xFFFFA726)
-                                                                                                                                        : Color(0xFF2E5BFF))
-                                                                                                                                        ?.withOpacity(0.3) ??
-                                                                                                                                        Color(0xFF2E5BFF).withOpacity(0.3),
-                                                                                                                                    blurRadius: 8,
-                                                                                                                                    offset: const Offset(0, 2),
-                                                                                                                            ),
-                                                                                                                    ],
-                                                                                                            ),
-                                                                                                            child: Icon(
-                                                                                                                    getHeroIcon(),
-                                                                                                                    color: Colors.white,
-                                                                                                                    size: 28,
-                                                                                                            ),
-                                                                                                    ),
-                                                                                                    const SizedBox(width: 20),
-                                                                                                    Expanded(
-                                                                                                            child: Column(
-                                                                                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                                                                                    children: [
-                                                                                                                            Row(
-                                                                                                                                    children: [
-                                                                                                                                            Expanded(
-                                                                                                                                                    child: Text(
-                                                                                                                                                            officerName,
-                                                                                                                                                            style: TextStyle(
-                                                                                                                                                                    fontSize: 16,
-                                                                                                                                                                    fontWeight: FontWeight.w600,
-                                                                                                                                                                    color: Color(0xFF1A1F36),
-                                                                                                                                                            ),
-                                                                                                                                                            maxLines: 1,
-                                                                                                                                                            overflow: TextOverflow.ellipsis,
-                                                                                                                                                    ),
-                                                                                                                                            ),
-                                                                                                                                    ],
-                                                                                                                            ),
-                                                                                                                            const SizedBox(height: 4),
-                                                                                                                            Wrap(
-                                                                                                                                    spacing: 8,
-                                                                                                                                    runSpacing: 4,
-                                                                                                                                    children: [
-                                                                                                                                            if (isPunishmentMode)
-                                                                                                                                                    Container(
-                                                                                                                                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                                                                                                                                            decoration: BoxDecoration(
-                                                                                                                                                                    color: Color(0xFFFFCDD2).withOpacity(0.15),
-                                                                                                                                                                    borderRadius: BorderRadius.circular(12),
-                                                                                                                                                                    border: Border.all(
-                                                                                                                                                                            color: Color(0xFFFF6B6B).withOpacity(0.3),
-                                                                                                                                                                            width: 1,
-                                                                                                                                                                    ),
-                                                                                                                                                            ),
-                                                                                                                                                            child: Text(
-                                                                                                                                                                    'PUNISHMENT',
-                                                                                                                                                                    style: TextStyle(
-                                                                                                                                                                            color: Color(0xFFFF6B6B),
-                                                                                                                                                                            fontSize: 10,
-                                                                                                                                                                            fontWeight: FontWeight.w600,
-                                                                                                                                                                    ),
-                                                                                                                                                            ),
-                                                                                                                                                    ),
-                                                                                                                                            if (isExcused)
-                                                                                                                                                    Container(
-                                                                                                                                                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                                                                                                                                                            decoration: BoxDecoration(
-                                                                                                                                                                    color: Color(0xFFFFECB3).withOpacity(0.15),
-                                                                                                                                                                    borderRadius: BorderRadius.circular(12),
-                                                                                                                                                                    border: Border.all(
-                                                                                                                                                                            color: Color(0xFFFFA726).withOpacity(0.3),
-                                                                                                                                                                            width: 1,
-                                                                                                                                                                    ),
-                                                                                                                                                            ),
-                                                                                                                                                            child: Text(
-                                                                                                                                                                    'EXCUSED',
-                                                                                                                                                                    style: TextStyle(
-                                                                                                                                                                            color: Color(0xFFFFA726),
-                                                                                                                                                                            fontSize: 10,
-                                                                                                                                                                            fontWeight: FontWeight.w600,
-                                                                                                                                                                    ),
-                                                                                                                                                            ),
-                                                                                                                                                    ),
-                                                                                                                                    ],
-                                                                                                                            ),
-                                                                                                                    ],
-                                                                                                            ),
-                                                                                                    ),
-                                                                                            ],
-                                                                                    ),
-                                                                                    const SizedBox(height: 20),
-                                                                                    Column(
-                                                                                            children: [
-                                                                                                    Row(
-                                                                                                            children: [
-                                                                                                                    Expanded(
-                                                                                                                            child: _buildInfoRow(
-                                                                                                                                    Icons.badge_rounded,
-                                                                                                                                    'Badge',
-                                                                                                                                    badgeNumber,
-                                                                                                                            ),
-                                                                                                                    ),
-                                                                                                                    const SizedBox(width: 20),
-                                                                                                                    Expanded(
-                                                                                                                            child: _buildInfoRow(
-                                                                                                                                    Icons.calendar_today_rounded,
-                                                                                                                                    'Date',
-                                                                                                                                    shiftDate,
-                                                                                                                            ),
-                                                                                                                    ),
-                                                                                                            ],
-                                                                                                    ),
-                                                                                                    const SizedBox(height: 8),
-                                                                                                    Row(
-                                                                                                            children: [
-                                                                                                                    Expanded(
-                                                                                                                            child: _buildInfoRow(
-                                                                                                                                    Icons.schedule_rounded,
-                                                                                                                                    'Type',
-                                                                                                                                    '$shiftType ($startTime - $endTime)',
-                                                                                                                            ),
-                                                                                                                    ),
-                                                                                                            ],
-                                                                                                    ),
-                                                                                                    const SizedBox(height: 8),
-                                                                                                    Row(
-                                                                                                            children: [
-                                                                                                                    Expanded(
-                                                                                                                            child: _buildInfoRow(
-                                                                                                                                    Icons.info_outline_rounded,
-                                                                                                                                    'Status',
-                                                                                                                                    shiftStatus,
-                                                                                                                                    textColor: _getStatusColor(shiftStatus),
-                                                                                                                            ),
-                                                                                                                    ),
-                                                                                                            ],
-                                                                                                    ),
-                                                                                                    const SizedBox(height: 8),
-                                                                                                    _buildInfoRow(
-                                                                                                            Icons.description_rounded,
-                                                                                                            'Description',
-                                                                                                            dutyDescription,
-                                                                                                            maxLines: 2,
-                                                                                                    ),
-                                                                                                    if (isExcused && excuseReason.isNotEmpty) ...[
-                                                                                                            const SizedBox(height: 8),
-                                                                                                            _buildInfoRow(
-                                                                                                                    Icons.note_rounded,
-                                                                                                                    'Excuse Reason',
-                                                                                                                    excuseReason,
-                                                                                                                    maxLines: 2,
-                                                                                                                    textColor: Color(0xFFFFA726),
-                                                                                                            ),
-                                                                                                    ],
-                                                                                            ],
-                                                                                    ),
-                                                                                    const SizedBox(height: 20),
-                                                                                    Row(
-                                                                                            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                                                                                            children: [
-                                                                                                    _buildActionButton(
-                                                                                                            icon: Icons.edit_rounded,
-                                                                                                            label: 'Edit',
-                                                                                                            color: Color(0xFF2E5BFF),
-                                                                                                            onPressed: isButtonDisabled ? null : () => _showShiftForm(existingShift: shift),
-                                                                                                    ),
-                                                                                                    _buildActionButton(
-                                                                                                            icon: Icons.swap_horiz_rounded,
-                                                                                                            label: 'Reassign',
-                                                                                                            color: Color(0xFFFFB75E),
-                                                                                                            onPressed: isButtonDisabled
-                                                                                                                ? null
-                                                                                                                : () => _reassignShift(
-                                                                                                                    shift['uid']?.toString() ?? '',
-                                                                                                                    shift['shiftDate']?.toString() ?? DateTime.now().toIso8601String().split('T')[0],
-                                                                                                                    shift['startTime']?.toString() ?? '06:00',
-                                                                                                                    shift['endTime']?.toString() ?? '14:00',
-                                                                                                            ),
-                                                                                                    ),
-                                                                                                    _buildActionButton(
-                                                                                                            icon: isExcused ? Icons.undo_rounded : Icons.event_busy_rounded,
-                                                                                                            label: isExcused ? 'Unexcuse' : 'Excuse',
-                                                                                                            color: Color(0xFFFFA726),
-                                                                                                            onPressed: isButtonDisabled ? null : () => _excuseShift(shift['uid']?.toString() ?? '', isExcused),
-                                                                                                    ),
-                                                                                                    _buildActionButton(
-                                                                                                            icon: Icons.delete_outline_rounded,
-                                                                                                            label: 'Delete',
-                                                                                                            color: Color(0xFFFF6B6B),
-                                                                                                            onPressed: isButtonDisabled ? null : () => _deleteShift(shift['uid']?.toString() ?? ''),
-                                                                                                    ),
-                                                                                            ],
-                                                                                    ),
-                                                                            ],
-                                                                    ),
-                                                            ),
-                                                    ),
-                                            ),
-                                    ),
-                            ),
-                    ),
+                        constraints: BoxConstraints(
+                                minHeight: 120.0,
+                                maxWidth: MediaQuery.of(context).size.width - 32,
+                        ),
+                        child: FadeTransition(
+                                opacity: _fadeAnimation,
+                                child: Transform.translate(
+                                        offset: Offset(0, _slideAnimation.value * (index + 1)),
+                                        child: Container(
+                                                margin: EdgeInsets.only(
+                                                        left: 20,
+                                                        right: 20,
+                                                        bottom: 20,
+                                                        top: index == 0 ? 10 : 0,
+                                                ),
+                                                decoration: BoxDecoration(
+                                                        color: getCardBackgroundColor(),
+                                                        borderRadius: BorderRadius.circular(20),
+                                                        border: Border.all(
+                                                                color: isPunishmentMode
+                                                                    ? Color(0xFFFF6B6B).withOpacity(0.2)
+                                                                    : isExcused
+                                                                    ? Color(0xFFFFA726).withOpacity(0.2)
+                                                                    : dutyTypeColor.withOpacity(0.2),
+                                                                width: 1,
+                                                        ),
+                                                        boxShadow: [
+                                                                BoxShadow(
+                                                                        color: Colors.black.withOpacity(0.05),
+                                                                        blurRadius: 8,
+                                                                        offset: const Offset(0, 2),
+                                                                ),
+                                                        ],
+                                                ),
+                                                child: Material(
+                                                        color: Colors.transparent,
+                                                        child: InkWell(
+                                                                borderRadius: BorderRadius.circular(20),
+                                                                onTap: isButtonDisabled ? null : () => _showShiftForm(existingShift: shift),
+                                                                child: Padding(
+                                                                        padding: const EdgeInsets.all(20),
+                                                                        child: Column(
+                                                                                children: [
+                                                                                        Row(
+                                                                                                crossAxisAlignment: CrossAxisAlignment.start,
+                                                                                                children: [
+                                                                                                        Container(
+                                                                                                                width: 56,
+                                                                                                                height: 56,
+                                                                                                                decoration: BoxDecoration(
+                                                                                                                        gradient: getHeroGradient(),
+                                                                                                                        borderRadius: BorderRadius.circular(12),
+                                                                                                                        boxShadow: [
+                                                                                                                                BoxShadow(
+                                                                                                                                        color: (isPunishmentMode
+                                                                                                                                            ? Color(0xFFFF6B6B)
+                                                                                                                                            : isExcused
+                                                                                                                                            ? Color(0xFFFFA726)
+                                                                                                                                            : dutyTypeColor)
+                                                                                                                                            .withOpacity(0.3),
+                                                                                                                                        blurRadius: 8,
+                                                                                                                                        offset: const Offset(0, 2),
+                                                                                                                                ),
+                                                                                                                        ],
+                                                                                                                ),
+                                                                                                                child: Icon(
+                                                                                                                        getHeroIcon(),
+                                                                                                                        color: Colors.white,
+                                                                                                                        size: 28,
+                                                                                                                ),
+                                                                                                        ),
+                                                                                                        const SizedBox(width: 20),
+                                                                                                        Expanded(
+                                                                                                                child: Column(
+                                                                                                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                                                                                                        children: [
+                                                                                                                                Row(
+                                                                                                                                        children: [
+                                                                                                                                                Expanded(
+                                                                                                                                                        child: Text(
+                                                                                                                                                                officerName,
+                                                                                                                                                                style: TextStyle(
+                                                                                                                                                                        fontSize: 16,
+                                                                                                                                                                        fontWeight: FontWeight.w600,
+                                                                                                                                                                        color: Color(0xFF1A1F36),
+                                                                                                                                                                ),
+                                                                                                                                                                maxLines: 1,
+                                                                                                                                                                overflow: TextOverflow.ellipsis,
+                                                                                                                                                        ),
+                                                                                                                                                ),
+                                                                                                                                        ],
+                                                                                                                                ),
+                                                                                                                                const SizedBox(height: 4),
+                                                                                                                                Wrap(
+                                                                                                                                        spacing: 8,
+                                                                                                                                        runSpacing: 4,
+                                                                                                                                        children: [
+                                                                                                                                                // Duty Type Badge
+                                                                                                                                                Container(
+                                                                                                                                                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                                                                                                                        decoration: BoxDecoration(
+                                                                                                                                                                color: dutyTypeColor.withOpacity(0.15),
+                                                                                                                                                                borderRadius: BorderRadius.circular(12),
+                                                                                                                                                                border: Border.all(
+                                                                                                                                                                        color: dutyTypeColor.withOpacity(0.3),
+                                                                                                                                                                        width: 1,
+                                                                                                                                                                ),
+                                                                                                                                                        ),
+                                                                                                                                                        child: Row(
+                                                                                                                                                                mainAxisSize: MainAxisSize.min,
+                                                                                                                                                                children: [
+                                                                                                                                                                        Icon(dutyTypeIcon, size: 12, color: dutyTypeColor),
+                                                                                                                                                                        const SizedBox(width: 4),
+                                                                                                                                                                        Text(
+                                                                                                                                                                                ShiftDutyTypeEnum.getLabel(shiftDutyType),
+                                                                                                                                                                                style: TextStyle(
+                                                                                                                                                                                        color: dutyTypeColor,
+                                                                                                                                                                                        fontSize: 10,
+                                                                                                                                                                                        fontWeight: FontWeight.w600,
+                                                                                                                                                                                ),
+                                                                                                                                                                        ),
+                                                                                                                                                                ],
+                                                                                                                                                        ),
+                                                                                                                                                ),
+                                                                                                                                                if (isPunishmentMode)
+                                                                                                                                                        Container(
+                                                                                                                                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                                                                                                                                decoration: BoxDecoration(
+                                                                                                                                                                        color: Color(0xFFFFCDD2).withOpacity(0.15),
+                                                                                                                                                                        borderRadius: BorderRadius.circular(12),
+                                                                                                                                                                        border: Border.all(
+                                                                                                                                                                                color: Color(0xFFFF6B6B).withOpacity(0.3),
+                                                                                                                                                                                width: 1,
+                                                                                                                                                                        ),
+                                                                                                                                                                ),
+                                                                                                                                                                child: Text(
+                                                                                                                                                                        'PUNISHMENT',
+                                                                                                                                                                        style: TextStyle(
+                                                                                                                                                                                color: Color(0xFFFF6B6B),
+                                                                                                                                                                                fontSize: 10,
+                                                                                                                                                                                fontWeight: FontWeight.w600,
+                                                                                                                                                                        ),
+                                                                                                                                                                ),
+                                                                                                                                                        ),
+                                                                                                                                                if (isExcused)
+                                                                                                                                                        Container(
+                                                                                                                                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                                                                                                                                                                decoration: BoxDecoration(
+                                                                                                                                                                        color: Color(0xFFFFECB3).withOpacity(0.15),
+                                                                                                                                                                        borderRadius: BorderRadius.circular(12),
+                                                                                                                                                                        border: Border.all(
+                                                                                                                                                                                color: Color(0xFFFFA726).withOpacity(0.3),
+                                                                                                                                                                                width: 1,
+                                                                                                                                                                        ),
+                                                                                                                                                                ),
+                                                                                                                                                                child: Text(
+                                                                                                                                                                        'EXCUSED',
+                                                                                                                                                                        style: TextStyle(
+                                                                                                                                                                                color: Color(0xFFFFA726),
+                                                                                                                                                                                fontSize: 10,
+                                                                                                                                                                                fontWeight: FontWeight.w600,
+                                                                                                                                                                        ),
+                                                                                                                                                                ),
+                                                                                                                                                        ),
+                                                                                                                                        ],
+                                                                                                                                ),
+                                                                                                                        ],
+                                                                                                                ),
+                                                                                                        ),
+                                                                                                ],
+                                                                                        ),
+                                                                                        const SizedBox(height: 20),
+                                                                                        Column(
+                                                                                                children: [
+                                                                                                        Row(
+                                                                                                                children: [
+                                                                                                                        Expanded(
+                                                                                                                                child: _buildInfoRow(
+                                                                                                                                        Icons.badge_rounded,
+                                                                                                                                        'Badge',
+                                                                                                                                        badgeNumber,
+                                                                                                                                ),
+                                                                                                                        ),
+                                                                                                                        const SizedBox(width: 20),
+                                                                                                                        Expanded(
+                                                                                                                                child: _buildInfoRow(
+                                                                                                                                        Icons.calendar_today_rounded,
+                                                                                                                                        'Date',
+                                                                                                                                        shiftDate,
+                                                                                                                                ),
+                                                                                                                        ),
+                                                                                                                ],
+                                                                                                        ),
+                                                                                                        const SizedBox(height: 8),
+                                                                                                        Row(
+                                                                                                                children: [
+                                                                                                                        Expanded(
+                                                                                                                                child: _buildInfoRow(
+                                                                                                                                        Icons.access_time_rounded,
+                                                                                                                                        'Time',
+                                                                                                                                        '$startTime - $endTime (${ShiftTimeEnum.getLabel(shiftTime)})',
+                                                                                                                                ),
+                                                                                                                        ),
+                                                                                                                ],
+                                                                                                        ),
+                                                                                                        if (shiftDutyType == ShiftDutyTypeEnum.CHECKPOINT_DUTY &&
+                                                                                                            shift['checkpoint'] != null) ...[
+                                                                                                                const SizedBox(height: 8),
+                                                                                                                _buildInfoRow(
+                                                                                                                        Icons.location_on_rounded,
+                                                                                                                        'Checkpoint',
+                                                                                                                        shift['checkpoint']['name'] ?? 'Unknown Checkpoint',
+                                                                                                                        textColor: Color(0xFFFFB75E),
+                                                                                                                ),
+                                                                                                        ],
+                                                                                                        const SizedBox(height: 8),
+                                                                                                        Row(
+                                                                                                                children: [
+                                                                                                                        Expanded(
+                                                                                                                                child: _buildInfoRow(
+                                                                                                                                        Icons.info_outline_rounded,
+                                                                                                                                        'Status',
+                                                                                                                                        shiftStatus,
+                                                                                                                                        textColor: _getStatusColor(shiftStatus),
+                                                                                                                                ),
+                                                                                                                        ),
+                                                                                                                ],
+                                                                                                        ),
+                                                                                                        const SizedBox(height: 8),
+                                                                                                        _buildInfoRow(
+                                                                                                                Icons.description_rounded,
+                                                                                                                'Description',
+                                                                                                                dutyDescription,
+                                                                                                                maxLines: 2,
+                                                                                                        ),
+                                                                                                        if (isExcused && excuseReason.isNotEmpty) ...[
+                                                                                                                const SizedBox(height: 8),
+                                                                                                                _buildInfoRow(
+                                                                                                                        Icons.note_rounded,
+                                                                                                                        'Excuse Reason',
+                                                                                                                        excuseReason,
+                                                                                                                        maxLines: 2,
+                                                                                                                        textColor: Color(0xFFFFA726),
+                                                                                                                ),
+                                                                                                        ],
+                                                                                                ],
+                                                                                        ),
+                                                                                        const SizedBox(height: 20),
+                                                                                        Row(
+                                                                                                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                                                                                                children: [
+                                                                                                        _buildActionButton(
+                                                                                                                icon: Icons.edit_rounded,
+                                                                                                                label: 'Edit',
+                                                                                                                color: Color(0xFF2E5BFF),
+                                                                                                                onPressed: isButtonDisabled ? null : () => _showShiftForm(existingShift: shift),
+                                                                                                        ),
+                                                                                                        _buildActionButton(
+                                                                                                                icon: Icons.swap_horiz_rounded,
+                                                                                                                label: 'Reassign',
+                                                                                                                color: Color(0xFFFFB75E),
+                                                                                                                onPressed: isButtonDisabled
+                                                                                                                    ? null
+                                                                                                                    : () => _reassignShift(
+                                                                                                                        shift['uid']?.toString() ?? '',
+                                                                                                                        shift['shiftDate']?.toString() ??
+                                                                                                                            DateTime.now().toIso8601String().split('T')[0],
+                                                                                                                        shift['startTime']?.toString() ?? '06:00',
+                                                                                                                        shift['endTime']?.toString() ?? '14:00',
+                                                                                                                ),
+                                                                                                        ),
+                                                                                                        _buildActionButton(
+                                                                                                                icon: isExcused ? Icons.undo_rounded : Icons.event_busy_rounded,
+                                                                                                                label: isExcused ? 'Unexcuse' : 'Excuse',
+                                                                                                                color: Color(0xFFFFA726),
+                                                                                                                onPressed: isButtonDisabled ? null : () => _excuseShift(shift['uid']?.toString() ?? '', isExcused),
+                                                                                                        ),
+                                                                                                        _buildActionButton(
+                                                                                                                icon: Icons.delete_outline_rounded,
+                                                                                                                label: 'Delete',
+                                                                                                                color: Color(0xFFFF6B6B),
+                                                                                                                onPressed: isButtonDisabled ? null : () => _deleteShift(shift['uid']?.toString() ?? ''),
+                                                                                                        ),
+                                                                                                ],
+                                                                                        ),
+                                                                                ],
+                                                                        ),
+                                                                ),
+                                                        ),
+                                                ),
+                                        ),
+                                ),
+                        ),
                 );
-                }
+        }
 
         Widget _buildInfoRow(
             IconData icon,
@@ -1438,11 +1461,17 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
 
         Color _getStatusColor(String status) {
                 if (status.contains('OFF')) {
-                        return Color(0xFFFF6B6B);
-                } else if (status.contains('ONGOING')) {
+                        return Color(0xFF9E9E9E);
+                } else if (status.contains('COMPLETED')) {
                         return Color(0xFF4CAF50);
+                } else if (status.contains('ONGOING')) {
+                        return Color(0xFF2E5BFF);
                 } else if (status.contains('EXCUSED')) {
                         return Color(0xFFFFA726);
+                } else if (status.contains('Scheduled')) {
+                        return Color(0xFF2E5BFF);
+                } else if (status.contains('Starts')) {
+                        return Color(0xFFFFB75E);
                 } else {
                         return Color(0xFF2E5BFF);
                 }
@@ -1496,6 +1525,9 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
         }
 
         Widget _buildStatsCard(Map<String, dynamic> data) {
+                final allShifts = data['shifts'] as List<Map<String, dynamic>>;
+                final filteredShifts = _filterShifts(allShifts);
+
                 return Container(
                         margin: const EdgeInsets.symmetric(horizontal: 20),
                         padding: const EdgeInsets.all(20),
@@ -1542,7 +1574,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                                 ),
                                                                 const SizedBox(height: 4),
                                                                 Text(
-                                                                        '${data['totalElements'] ?? 0}',
+                                                                        '${filteredShifts.length}',
                                                                         style: TextStyle(
                                                                                 fontSize: 32,
                                                                                 fontWeight: FontWeight.w700,
@@ -1608,6 +1640,9 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                         children: [
                                                                 const SizedBox(height: 20),
                                                                 _buildModernSearchBar(),
+                                                                const SizedBox(height: 16),
+                                                                _buildDutyTypeFilter(),
+                                                                const SizedBox(height: 16),
                                                         ],
                                                 ),
                                         ),
@@ -1777,7 +1812,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                                                 children: [
                                                                                         _buildStatsCard(data),
                                                                                         const SizedBox(height: 20),
-                                                                                        if (filteredShifts.isEmpty && _searchQuery.isNotEmpty)
+                                                                                        if (filteredShifts.isEmpty && (_searchQuery.isNotEmpty || _filterDutyType.isNotEmpty))
                                                                                                 Container(
                                                                                                         margin: const EdgeInsets.all(20),
                                                                                                         padding: const EdgeInsets.all(20),
@@ -1811,7 +1846,7 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                                                                                         ),
                                                                                                                         const SizedBox(height: 12),
                                                                                                                         Text(
-                                                                                                                                'Try using a different search term',
+                                                                                                                                'Try using a different search term or filter',
                                                                                                                                 style: TextStyle(
                                                                                                                                         fontSize: 14,
                                                                                                                                         color: Color(0xFF8F9BB3),
@@ -1825,7 +1860,8 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                                                                                 ...filteredShifts.asMap().entries.map((entry) {
                                                                                                         return _buildShiftCard(entry.value, entry.key);
                                                                                                 }).toList(),
-                                                                                        if (_hasMore && _searchQuery.isEmpty) _buildLoadMoreButton(),
+                                                                                        if (_hasMore && _searchQuery.isEmpty && _filterDutyType.isEmpty)
+                                                                                                _buildLoadMoreButton(),
                                                                                         const SizedBox(height: 100),
                                                                                 ],
                                                                         );
@@ -1948,9 +1984,10 @@ class _ModernButton extends StatelessWidget {
 
                 return Container(
                         decoration: BoxDecoration(
-                                gradient: gradient ?? LinearGradient(
-                                        colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
-                                ),
+                                gradient: gradient ??
+                                    LinearGradient(
+                                            colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+                                    ),
                                 borderRadius: BorderRadius.circular(15),
                                 boxShadow: [
                                         BoxShadow(

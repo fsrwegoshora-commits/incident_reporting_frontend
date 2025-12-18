@@ -2,17 +2,17 @@ import 'package:flutter/material.dart';
 import '../../services/graphql_service.dart';
 import '../../utils/graphql_query.dart';
 import '../../theme/app_theme.dart';
-import 'register_police_officer_tab.dart';
+import 'register_traffic_checkpoint_tab.dart';
 
-class PoliceOfficerManagementScreen extends StatefulWidget {
+class TrafficCheckpointManagementScreen extends StatefulWidget {
   @override
-  _PoliceOfficerManagementScreenState createState() => _PoliceOfficerManagementScreenState();
+  _TrafficCheckpointManagementScreenState createState() => _TrafficCheckpointManagementScreenState();
 }
 
-class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementScreen>
+class _TrafficCheckpointManagementScreenState extends State<TrafficCheckpointManagementScreen>
     with TickerProviderStateMixin {
   final gql = GraphQLService();
-  List<Map<String, dynamic>> _policeOfficers = [];
+  List<Map<String, dynamic>> _checkpoints = [];
   bool _isLoading = true;
 
   // Search functionality
@@ -58,7 +58,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
       CurvedAnimation(parent: _fabAnimationController, curve: Curves.elasticOut),
     );
 
-    _fetchPoliceOfficers();
+    _fetchCheckpoints();
     _animationController.forward();
     _fabAnimationController.forward();
   }
@@ -71,14 +71,14 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
     super.dispose();
   }
 
-  Future<void> _fetchPoliceOfficers() async {
+  Future<void> _fetchCheckpoints() async {
     setState(() => _isLoading = true);
     try {
-      final response = await gql.sendAuthenticatedQuery(getPoliceOfficersQuery, {
+      final response = await gql.sendAuthenticatedQuery(getTrafficCheckpointsQuery, {
         "pageableParam": {
           "page": _currentPage,
           "size": _pageSize,
-          "sortBy": "userAccount.name",
+          "sortBy": "name",
           "sortDirection": "ASC",
           "isActive": true,
         }
@@ -88,21 +88,21 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
         throw Exception(response['errors'][0]['message']);
       }
 
-      final data = response['data']?['getPoliceOfficers'] ?? {};
-      final policeOfficers = data['data'] ?? [];
+      final data = response['data']?['getTrafficCheckpoints'] ?? {};
+      final checkpoints = data['data'] ?? [];
       final totalPages = data['pages'] ?? 0;
 
       setState(() {
         if (_currentPage == 0) {
-          _policeOfficers = List<Map<String, dynamic>>.from(policeOfficers);
+          _checkpoints = List<Map<String, dynamic>>.from(checkpoints);
         } else {
-          _policeOfficers.addAll(List<Map<String, dynamic>>.from(policeOfficers));
+          _checkpoints.addAll(List<Map<String, dynamic>>.from(checkpoints));
         }
         _hasMore = _currentPage < totalPages - 1;
         _isLoading = false;
       });
     } catch (e) {
-      _showErrorSnackBar("Error loading police officers: $e");
+      _showErrorSnackBar("Error loading checkpoints: $e");
       setState(() => _isLoading = false);
     }
   }
@@ -110,7 +110,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
   void _loadNextPage() {
     if (_hasMore && !_isLoading) {
       setState(() => _currentPage++);
-      _fetchPoliceOfficers();
+      _fetchCheckpoints();
     }
   }
 
@@ -121,23 +121,23 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
       _searchQuery = '';
       _searchController.clear();
     });
-    _fetchPoliceOfficers();
+    _fetchCheckpoints();
     _animationController.reset();
     _animationController.forward();
   }
 
-  Future<void> _deletePoliceOfficer(String uid) async {
+  Future<void> _deleteCheckpoint(String uid) async {
     final confirm = await _showModernDialog();
 
     if (confirm == true) {
       try {
-        final response = await gql.sendAuthenticatedMutation(deletePoliceOfficerMutation, {"uid": uid});
+        final response = await gql.sendAuthenticatedMutation(deleteTrafficCheckpointMutation, {"uid": uid});
 
         if (response['errors'] != null) {
           throw Exception(response['errors'][0]['message']);
         }
 
-        final result = response['data']?['deletePoliceOfficer'];
+        final result = response['data']?['deleteTrafficCheckpoint'];
         final message = result?['message'] ?? "Delete failed";
         final isSuccess = result?['status'] == true || message.toLowerCase().contains('success');
 
@@ -195,7 +195,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                   ),
                   const SizedBox(height: AppTheme.spaceM),
                   Text(
-                    'Are you sure you want to delete this police officer? This action cannot be undone.',
+                    'Are you sure you want to delete this traffic checkpoint? This action cannot be undone.',
                     style: AppTheme.bodyMedium,
                     textAlign: TextAlign.center,
                   ),
@@ -233,8 +233,8 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
       SnackBar(
         content: Container(
           decoration: BoxDecoration(
-            gradient: isSuccess ?
-            LinearGradient(colors: [Color(0xFF10B981), Color(0xFF059669)])
+            gradient: isSuccess
+                ? LinearGradient(colors: [Color(0xFF10B981), Color(0xFF059669)])
                 : LinearGradient(colors: [Color(0xFFEF4444), Color(0xFFDC2626)]),
             borderRadius: AppTheme.cardRadius,
           ),
@@ -283,13 +283,13 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
     _showModernSnackBar(message, isSuccess: true);
   }
 
-  void _openRegisterPoliceOfficer({Map<String, dynamic>? existingOfficer}) {
+  void _openRegisterCheckpoint({Map<String, dynamic>? existingCheckpoint}) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
         shape: RoundedRectangleBorder(borderRadius: AppTheme.cardRadius),
-        child: RegisterPoliceOfficerTab(
-          existingOfficer: existingOfficer,
+        child: RegisterTrafficCheckpointTab(
+          existingCheckpoint: existingCheckpoint,
           onSubmit: _refreshList,
         ),
       ),
@@ -307,7 +307,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
         onChanged: (value) => setState(() => _searchQuery = value),
         style: AppTheme.bodyMedium.copyWith(color: AppTheme.textPrimary),
         decoration: InputDecoration(
-          hintText: 'Search police officer...',
+          hintText: 'Search checkpoint...',
           hintStyle: AppTheme.bodyMedium.copyWith(
             color: AppTheme.textSecondary.withOpacity(0.7),
           ),
@@ -338,28 +338,26 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
     );
   }
 
-  List<Map<String, dynamic>> _filterPoliceOfficers(List<Map<String, dynamic>> policeOfficers) {
-    if (_searchQuery.isEmpty) return policeOfficers;
+  List<Map<String, dynamic>> _filterCheckpoints(List<Map<String, dynamic>> checkpoints) {
+    if (_searchQuery.isEmpty) return checkpoints;
 
-    return policeOfficers.where((officer) {
-      final name = officer['userAccount']?['name']?.toString().toLowerCase() ?? '';
-      final badgeNumber = officer['badgeNumber']?.toString().toLowerCase() ?? '';
-      final code = officer['code']?.toString().toLowerCase() ?? '';
-      final phone = officer['userAccount']?['phoneNumber']?.toString().toLowerCase() ?? '';
-      final station = officer['station']?['name']?.toString().toLowerCase() ?? '';
-      final department = officer['department']?['name']?.toString().toLowerCase() ?? '';
+    return checkpoints.where((checkpoint) {
+      final name = checkpoint['name']?.toString().toLowerCase() ?? '';
+      final contactPhone = checkpoint['contactPhone']?.toString().toLowerCase() ?? '';
+      final address = checkpoint['location']?['address']?.toString().toLowerCase() ?? '';
+      final station = checkpoint['parentStation']?['name']?.toString().toLowerCase() ?? '';
+      final supervisor = checkpoint['supervisingOfficer']?['userAccount']?['name']?.toString().toLowerCase() ?? '';
       final query = _searchQuery.toLowerCase();
 
       return name.contains(query) ||
-          badgeNumber.contains(query) ||
-          code.contains(query) ||
-          phone.contains(query) ||
+          contactPhone.contains(query) ||
+          address.contains(query) ||
           station.contains(query) ||
-          department.contains(query);
+          supervisor.contains(query);
     }).toList();
   }
 
-  Widget _buildPoliceOfficerCard(Map<String, dynamic> officer, int index) {
+  Widget _buildCheckpointCard(Map<String, dynamic> checkpoint, int index) {
     return AnimatedBuilder(
       animation: _slideAnimation,
       builder: (context, child) => Transform.translate(
@@ -380,7 +378,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
               color: Colors.transparent,
               child: InkWell(
                 borderRadius: AppTheme.largeRadius,
-                onTap: () => _openRegisterPoliceOfficer(existingOfficer: officer),
+                onTap: () => _openRegisterCheckpoint(existingCheckpoint: checkpoint),
                 child: Padding(
                   padding: const EdgeInsets.all(AppTheme.spaceM),
                   child: Row(
@@ -394,7 +392,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                           boxShadow: [AppTheme.cardShadow],
                         ),
                         child: const Icon(
-                          Icons.person,
+                          Icons.traffic,
                           color: AppTheme.cardWhite,
                           size: 24,
                         ),
@@ -405,7 +403,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              officer['userAccount']?['name'] ?? 'Unknown',
+                              checkpoint['name'] ?? 'Unknown',
                               style: AppTheme.titleSmall,
                               maxLines: 1,
                               overflow: TextOverflow.ellipsis,
@@ -414,14 +412,14 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                             Row(
                               children: [
                                 Icon(
-                                  Icons.badge,
+                                  Icons.phone,
                                   size: 14,
                                   color: AppTheme.textSecondary,
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
-                                    officer['badgeNumber'] ?? 'N/A',
+                                    checkpoint['contactPhone'] ?? 'N/A',
                                     style: AppTheme.bodySmall,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -440,7 +438,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
-                                    officer['station']?['name'] ?? 'N/A',
+                                    checkpoint['location']?['address'] ?? 'N/A',
                                     style: AppTheme.bodySmall,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -452,14 +450,14 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                             Row(
                               children: [
                                 Icon(
-                                  Icons.domain,
+                                  Icons.person,
                                   size: 14,
                                   color: AppTheme.textSecondary,
                                 ),
                                 const SizedBox(width: 4),
                                 Expanded(
                                   child: Text(
-                                    officer['department']?['name'] ?? 'N/A',
+                                    checkpoint['supervisingOfficer']?['userAccount']?['name'] ?? 'N/A',
                                     style: AppTheme.bodySmall,
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
@@ -479,8 +477,8 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                         child: IconButton(
                           icon: const Icon(Icons.delete_outline, size: 20),
                           color: AppTheme.errorRed,
-                          onPressed: () => _deletePoliceOfficer(officer['uid']),
-                          tooltip: 'Delete police officer',
+                          onPressed: () => _deleteCheckpoint(checkpoint['uid']),
+                          tooltip: 'Delete checkpoint',
                         ),
                       ),
                     ],
@@ -537,7 +535,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
   }
 
   Widget _buildStatsCard() {
-    final filteredOfficers = _filterPoliceOfficers(_policeOfficers);
+    final filteredCheckpoints = _filterCheckpoints(_checkpoints);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: AppTheme.spaceM),
@@ -554,7 +552,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
               borderRadius: AppTheme.cardRadius,
             ),
             child: const Icon(
-              Icons.people,
+              Icons.traffic,
               color: AppTheme.cardWhite,
               size: 32,
             ),
@@ -565,14 +563,14 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Total Police Officers',
+                  'Total Checkpoints',
                   style: AppTheme.bodyMedium.copyWith(
                     color: AppTheme.cardWhite.withOpacity(0.8),
                   ),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '${filteredOfficers.length}',
+                  '${filteredCheckpoints.length}',
                   style: AppTheme.headlineMedium.copyWith(
                     color: AppTheme.cardWhite,
                   ),
@@ -587,7 +585,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
 
   @override
   Widget build(BuildContext context) {
-    final filteredOfficers = _filterPoliceOfficers(_policeOfficers);
+    final filteredCheckpoints = _filterCheckpoints(_checkpoints);
 
     return Scaffold(
       backgroundColor: AppTheme.surfaceWhite,
@@ -605,7 +603,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
               ),
               child: FlexibleSpaceBar(
                 title: Text(
-                  'Police Officer Management',
+                  'Traffic Checkpoint Management',
                   style: AppTheme.titleLarge.copyWith(
                     color: AppTheme.cardWhite,
                   ),
@@ -661,7 +659,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                     ),
                     const SizedBox(height: AppTheme.spaceL),
                     Text(
-                      'Loading police officers...',
+                      'Loading checkpoints...',
                       style: AppTheme.bodyMedium,
                     ),
                   ],
@@ -672,7 +670,7 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
               children: [
                 _buildStatsCard(),
                 const SizedBox(height: AppTheme.spaceM),
-                if (filteredOfficers.isEmpty && _searchQuery.isEmpty)
+                if (filteredCheckpoints.isEmpty && _searchQuery.isEmpty)
                   Container(
                     margin: const EdgeInsets.all(AppTheme.spaceL),
                     padding: const EdgeInsets.all(AppTheme.spaceXL),
@@ -687,27 +685,27 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                             borderRadius: AppTheme.pillRadius,
                           ),
                           child: const Icon(
-                            Icons.people_outline,
+                            Icons.traffic_outlined,
                             color: AppTheme.cardWhite,
                             size: 40,
                           ),
                         ),
                         const SizedBox(height: AppTheme.spaceL),
                         Text(
-                          'No police officers found',
+                          'No checkpoints found',
                           style: AppTheme.titleMedium,
                           textAlign: TextAlign.center,
                         ),
                         const SizedBox(height: AppTheme.spaceM),
                         Text(
-                          'Click the (+) button to add the first police officer',
+                          'Click the (+) button to add the first traffic checkpoint',
                           style: AppTheme.bodyMedium,
                           textAlign: TextAlign.center,
                         ),
                       ],
                     ),
                   )
-                else if (filteredOfficers.isEmpty && _searchQuery.isNotEmpty)
+                else if (filteredCheckpoints.isEmpty && _searchQuery.isNotEmpty)
                   Container(
                     margin: const EdgeInsets.all(AppTheme.spaceL),
                     padding: const EdgeInsets.all(AppTheme.spaceXL),
@@ -735,8 +733,8 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
                     ),
                   )
                 else
-                  ...filteredOfficers.asMap().entries.map((entry) {
-                    return _buildPoliceOfficerCard(entry.value, entry.key);
+                  ...filteredCheckpoints.asMap().entries.map((entry) {
+                    return _buildCheckpointCard(entry.value, entry.key);
                   }).toList(),
                 if (_hasMore && _searchQuery.isEmpty) _buildLoadMoreButton(),
                 const SizedBox(height: 100), // FAB space
@@ -754,12 +752,12 @@ class _PoliceOfficerManagementScreenState extends State<PoliceOfficerManagementS
             boxShadow: [AppTheme.elevatedShadow],
           ),
           child: FloatingActionButton.extended(
-            onPressed: () => _openRegisterPoliceOfficer(),
+            onPressed: () => _openRegisterCheckpoint(),
             backgroundColor: Colors.transparent,
             elevation: 0,
-            icon: const Icon(Icons.person_add, color: AppTheme.cardWhite),
+            icon: const Icon(Icons.add_location, color: AppTheme.cardWhite),
             label: Text(
-              'Register Officer',
+              'Add Checkpoint',
               style: AppTheme.buttonTextMedium,
             ),
           ),
