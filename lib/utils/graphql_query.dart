@@ -1697,6 +1697,45 @@ query GetTrafficCheckpoints(\$pageableParam: PageableParamInput) {
 }
 """;
 
+const String activateOrDeactivateCheckpointMutation = """
+  mutation ActivateOrDeactivateCheckpoint(\$checkpointUid: String!) {
+    activateOrDeactivateCheckpoint(checkpointUid: \$checkpointUid) {
+      status
+      message
+      data {
+        uid
+        name
+        contactPhone
+        coverageRadiusKm
+        active
+        location {
+          latitude
+          longitude
+          address
+        }
+        parentStation {
+          uid
+          name
+        }
+        department {
+          uid
+          name
+          type
+        }
+        supervisingOfficer {
+          uid
+          badgeNumber
+          code
+          userAccount {
+            uid
+            name
+            phoneNumber
+          }
+        }
+      }
+    }
+  }
+""";
 const String assignSupervisorMutation = """
 mutation AssignSupervisor(\$checkpointUid: String!, \$officerUid: String!) {
   assignSupervisor(checkpointUid: \$checkpointUid, officerUid: \$officerUid) {

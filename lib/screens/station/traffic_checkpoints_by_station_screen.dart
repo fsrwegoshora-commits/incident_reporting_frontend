@@ -178,6 +178,78 @@ class _TrafficCheckpointsByStationScreenState extends State<TrafficCheckpointsBy
     }
   }
 
+  // ✅ TOGGLE CHECKPOINT ACTIVATION/DEACTIVATION
+  Future<void> _toggleCheckpointStatus(Map<String, dynamic> checkpoint) async {
+    final checkpointUid = checkpoint['uid']?.toString() ?? '';
+    final checkpointName = checkpoint['name'] ?? 'Unknown';
+    final currentStatus = checkpoint['active'] ?? true;
+
+    // Show confirmation dialog
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(
+          currentStatus ? 'Deactivate Checkpoint?' : 'Activate Checkpoint?',
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
+        content: Text(
+          currentStatus
+              ? 'Are you sure you want to deactivate "$checkpointName"?'
+              : 'Are you sure you want to activate "$checkpointName"?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: currentStatus ? Colors.red : Colors.green,
+            ),
+            child: Text(
+              currentStatus ? 'Deactivate' : 'Activate',
+              style: const TextStyle(color: Colors.white),
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    try {
+      final response = await gql.sendAuthenticatedMutation(
+        activateOrDeactivateCheckpointMutation,
+        {"checkpointUid": checkpointUid},
+      );
+
+      print("📡 Response: $response");
+
+      if (response['errors'] != null) {
+        throw Exception(response['errors'][0]['message']);
+      }
+
+      final result = response['data']?['activateOrDeactivateCheckpoint'];
+      final isSuccess = result?['status'] == 'Success' || result?['status'] == true;
+
+      if (isSuccess) {
+        final newStatus = result?['data']?['active'] ?? !currentStatus;
+        final message = newStatus ? 'Checkpoint activated ✅' : 'Checkpoint deactivated ⚠️';
+
+        _showModernSnackBar(message, isSuccess: true);
+
+        // Refresh list to update UI
+        _refreshList();
+      } else {
+        _showModernSnackBar(result?['message'] ?? "Failed to toggle checkpoint status", isSuccess: false);
+      }
+    } catch (e) {
+      print("❌ Error: $e");
+      _showModernSnackBar("Error: $e", isSuccess: false);
+    }
+  }
+
   Future<bool?> _showModernDialog() {
     return showDialog<bool>(
       context: context,
@@ -434,227 +506,292 @@ class _TrafficCheckpointsByStationScreenState extends State<TrafficCheckpointsBy
     final checkpointUid = checkpoint['uid']?.toString() ?? '';
     final isActive = checkpoint['active'] ?? true;
 
+    final opacity = isActive ? 1.0 : 0.5;
+    final isDisabled = !isActive;
+
     return AnimatedBuilder(
       animation: _slideAnimation,
       builder: (context, child) => Transform.translate(
         offset: Offset(0, _slideAnimation.value),
         child: FadeTransition(
           opacity: _fadeAnimation,
-          child: Container(
-            margin: EdgeInsets.only(
-              left: 20,
-              right: 20,
-              bottom: 20,
-              top: index == 0 ? 10 : 0,
-            ),
-            decoration: BoxDecoration(
-              color: Color(0xFFFF9800).withOpacity(0.06),
-              borderRadius: BorderRadius.circular(20),
-              border: Border.all(
-                color: Color(0xFFFF9800).withOpacity(0.15),
-                width: 1,
+          child: Opacity(
+            opacity: opacity,
+            child: Container(
+              margin: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                bottom: 20,
+                top: index == 0 ? 10 : 0,
               ),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
-                  blurRadius: 8,
-                  offset: const Offset(0, 2),
-                ),
-              ],
-            ),
-            child: Material(
-              color: Colors.transparent,
-              child: InkWell(
+              decoration: BoxDecoration(
+                color: isActive
+                    ? Color(0xFFFF9800).withOpacity(0.06)
+                    : Color(0xFF999999).withOpacity(0.06),
                 borderRadius: BorderRadius.circular(20),
-                onTap: () => _showRegisterForm(existingCheckpoint: checkpoint),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    children: [
-                      Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Hero(
-                            tag: 'checkpoint_${checkpoint['uid'] ?? index}',
-                            child: Container(
-                              width: 64,
-                              height: 64,
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  colors: [
-                                    Color(0xFFFF9800).withOpacity(0.8),
-                                    Color(0xFFFF9800),
+                border: Border.all(
+                  color: isActive
+                      ? Color(0xFFFF9800).withOpacity(0.15)
+                      : Color(0xFF999999).withOpacity(0.15),
+                  width: 1,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withOpacity(0.05),
+                    blurRadius: 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ],
+              ),
+              child: Material(
+                color: Colors.transparent,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(20),
+                  onTap: isDisabled ? null : () => _showRegisterForm(existingCheckpoint: checkpoint),
+                  child: Padding(
+                    padding: const EdgeInsets.all(20),
+                    child: Column(
+                      children: [
+                        // ✅ TOP ROW: Icon + Name + Status Toggle Button
+                        Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Hero(
+                              tag: 'checkpoint_${checkpoint['uid'] ?? index}',
+                              child: Container(
+                                width: 64,
+                                height: 64,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: isActive
+                                        ? [
+                                      Color(0xFFFF9800).withOpacity(0.8),
+                                      Color(0xFFFF9800),
+                                    ]
+                                        : [
+                                      Color(0xFF999999).withOpacity(0.8),
+                                      Color(0xFF999999),
+                                    ],
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                  ),
+                                  borderRadius: BorderRadius.circular(16),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: (isActive ? Color(0xFFFF9800) : Color(0xFF999999)).withOpacity(0.3),
+                                      blurRadius: 8,
+                                      offset: const Offset(0, 2),
+                                    ),
                                   ],
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
                                 ),
-                                borderRadius: BorderRadius.circular(16),
+                                child: const Icon(
+                                  Icons.traffic,
+                                  color: Colors.white,
+                                  size: 32,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 20),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    checkpointName,
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w600,
+                                      color: Color(0xFF1A1F36),
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: isActive
+                                          ? Color(0xFF10B981).withOpacity(0.1)
+                                          : Color(0xFFFF6B6B).withOpacity(0.1),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          isActive ? Icons.circle : Icons.circle_outlined,
+                                          size: 8,
+                                          color: isActive ? Color(0xFF10B981) : Color(0xFFFF6B6B),
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          isActive ? 'Active' : 'Inactive',
+                                          style: TextStyle(
+                                            color: isActive
+                                                ? Color(0xFF10B981)
+                                                : Color(0xFFFF6B6B),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Container(
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(12),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Color(0xFFFF9800).withOpacity(0.3),
-                                    blurRadius: 8,
+                                    color: Colors.black.withOpacity(0.1),
+                                    blurRadius: 6,
                                     offset: const Offset(0, 2),
                                   ),
                                 ],
                               ),
-                              child: const Icon(
-                                Icons.traffic,
-                                color: Colors.white,
-                                size: 32,
-                              ),
-                            ),
-                          ),
-                          const SizedBox(width: 20),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  checkpointName,
-                                  style: TextStyle(
-                                    fontSize: 18,
-                                    fontWeight: FontWeight.w600,
-                                    color: Color(0xFF1A1F36),
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                                const SizedBox(height: 6),
-                                Container(
-                                  padding:
-                                  const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                                  decoration: BoxDecoration(
-                                    color: isActive
-                                        ? Color(0xFF10B981).withOpacity(0.15)
-                                        : Color(0xFFFF6B6B).withOpacity(0.15),
-                                    borderRadius: BorderRadius.circular(12),
-                                    border: Border.all(
-                                      color: isActive
-                                          ? Color(0xFF10B981).withOpacity(0.3)
-                                          : Color(0xFFFF6B6B).withOpacity(0.3),
-                                      width: 1,
+                              child: Material(
+                                color: Colors.transparent,
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(12),
+                                  onTap: () => _toggleCheckpointStatus(checkpoint),
+                                  splashColor: isActive ? Color(0xFF10B981).withOpacity(0.2) : Color(0xFFFF6B6B).withOpacity(0.2),
+                                  highlightColor: isActive ? Color(0xFF10B981).withOpacity(0.1) : Color(0xFFFF6B6B).withOpacity(0.1),
+                                  child: Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                                    decoration: BoxDecoration(
+                                      gradient: isActive
+                                          ? LinearGradient(
+                                        colors: [Color(0xFF10B981), Color(0xFF059669)],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      )
+                                          : LinearGradient(
+                                        colors: [Color(0xFFFF6B6B), Color(0xFFFF5252)],
+                                        begin: Alignment.topLeft,
+                                        end: Alignment.bottomRight,
+                                      ),
+                                      borderRadius: BorderRadius.circular(12),
+                                      border: Border.all(
+                                        color: isActive ? Color(0xFF10B981).withOpacity(0.3) : Color(0xFFFF6B6B).withOpacity(0.3),
+                                        width: 1,
+                                      ),
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        Icon(
+                                          isActive ? Icons.toggle_on_rounded : Icons.toggle_off_rounded,
+                                          size: 20,
+                                          color: Colors.white,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          isActive ? 'Deactivate' : 'Activate',
+                                          style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 12,
+                                            fontWeight: FontWeight.w700,
+                                            letterSpacing: 0.3,
+                                          ),
+                                        ),
+                                      ],
                                     ),
                                   ),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(
-                                        isActive ? Icons.check_circle : Icons.cancel,
-                                        size: 14,
-                                        color: isActive ? Color(0xFF10B981) : Color(0xFFFF6B6B),
-                                      ),
-                                      const SizedBox(width: 4),
-                                      Text(
-                                        isActive ? 'ACTIVE' : 'INACTIVE',
-                                        style: TextStyle(
-                                          color: isActive
-                                              ? Color(0xFF10B981)
-                                              : Color(0xFFFF6B6B),
-                                          fontSize: 12,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        // ✅ CHECKPOINT INFO ROWS
+                        Column(
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildCheckpointInfoRow(
+                                    Icons.phone_rounded,
+                                    'Contact',
+                                    contactPhone,
+                                  ),
+                                ),
+                                const SizedBox(width: 20),
+                                Expanded(
+                                  child: _buildCheckpointInfoRow(
+                                    Icons.radio,
+                                    'Coverage',
+                                    '${coverageRadius} km',
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                      Column(
-                        children: [
-                          Row(
-                            children: [
-                              Expanded(
-                                child: _buildCheckpointInfoRow(
-                                  Icons.phone_rounded,
-                                  'Contact',
-                                  contactPhone,
-                                ),
-                              ),
-                              const SizedBox(width: 20),
-                              Expanded(
-                                child: _buildCheckpointInfoRow(
-                                  Icons.radio,
-                                  'Coverage',
-                                  '${coverageRadius} km',
-                                ),
-                              ),
-                            ],
-                          ),
-                          const SizedBox(height: 12),
-                          _buildCheckpointInfoRow(
-                            Icons.location_on_rounded,
-                            'Address',
-                            address,
-                            maxLines: 2,
-                          ),
-                          const SizedBox(height: 12),
-                          _buildCheckpointInfoRow(
-                            Icons.person_rounded,
-                            'Supervisor',
-                            supervisorName,
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 20),
-                      // ACTION BUTTONS - UPDATED WITH SHIFTS BUTTON
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                        children: [
-                          _buildCheckpointActionButton(
-                            icon: Icons.edit_rounded,
-                            label: 'Edit',
-                            color: Color(0xFF2E5BFF),
-                            onPressed: () =>
-                                _showRegisterForm(existingCheckpoint: checkpoint),
-                          ),
-                          _buildCheckpointActionButton(
-                            icon: Icons.schedule_rounded,
-                            label: 'Shifts',
-                            color: Color(0xFFFF9800),
-                            onPressed: () {
-                              Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (context) => CheckpointShiftsScreen(
-                                    checkpointUid: checkpointUid,
-                                    checkpointName: checkpointName,
-                                    stationName: widget.stationName,
+                            const SizedBox(height: 12),
+                            _buildCheckpointInfoRow(
+                              Icons.location_on_rounded,
+                              'Address',
+                              address,
+                              maxLines: 2,
+                            ),
+                            const SizedBox(height: 12),
+                            _buildCheckpointInfoRow(
+                              Icons.person_rounded,
+                              'Supervisor',
+                              supervisorName,
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        // ✅ ACTION BUTTONS - Only 4 (Edit, Shifts, Map, Delete)
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            _buildCheckpointActionButton(
+                              icon: Icons.edit_rounded,
+                              label: 'Edit',
+                              color: Color(0xFF2E5BFF),
+                              onPressed: isDisabled ? null : () =>
+                                  _showRegisterForm(existingCheckpoint: checkpoint),
+                            ),
+                            _buildCheckpointActionButton(
+                              icon: Icons.schedule_rounded,
+                              label: 'Shifts',
+                              color: Color(0xFFFF9800),
+                              onPressed: isDisabled ? null : () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => CheckpointShiftsScreen(
+                                      checkpointUid: checkpointUid,
+                                      checkpointName: checkpointName,
+                                      stationName: widget.stationName,
+                                    ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
-                          _buildCheckpointActionButton(
-                            icon: Icons.map_rounded,
-                            label: 'Map',
-                            color: Color(0xFF4ECDC4),
-                            onPressed: () {
-                              // TODO: Implement map view
-                              _showModernSnackBar(
-                                'Map view coming soon',
-                                isSuccess: true,
-                              );
-                            },
-                          ),
-                          _buildCheckpointActionButton(
-                            icon: Icons.info_rounded,
-                            label: 'Details',
-                            color: Color(0xFFFFB75E),
-                            onPressed: () => _showCheckpointDetails(checkpoint),
-                          ),
-                          _buildCheckpointActionButton(
-                            icon: Icons.delete_outline_rounded,
-                            label: 'Delete',
-                            color: Color(0xFFFF6B6B),
-                            onPressed: () => _deleteCheckpoint(checkpointUid),
-                          ),
-                        ],
-                      ),
-                    ],
+                                );
+                              },
+                            ),
+                            _buildCheckpointActionButton(
+                              icon: Icons.map_rounded,
+                              label: 'Map',
+                              color: Color(0xFF4ECDC4),
+                              onPressed: isDisabled ? null : () {
+                                _showModernSnackBar(
+                                  'Map view coming soon',
+                                  isSuccess: true,
+                                );
+                              },
+                            ),
+                            _buildCheckpointActionButton(
+                              icon: Icons.delete_outline_rounded,
+                              label: 'Delete',
+                              color: Color(0xFFFF6B6B),
+                              onPressed: isDisabled ? null : () => _deleteCheckpoint(checkpointUid),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -664,7 +801,6 @@ class _TrafficCheckpointsByStationScreenState extends State<TrafficCheckpointsBy
       ),
     );
   }
-
   void _showCheckpointDetails(Map<String, dynamic> checkpoint) {
     showDialog(
       context: context,
@@ -815,6 +951,8 @@ class _TrafficCheckpointsByStationScreenState extends State<TrafficCheckpointsBy
     required Color color,
     required VoidCallback? onPressed,
   }) {
+    final isDisabled = onPressed == null;
+
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -822,16 +960,20 @@ class _TrafficCheckpointsByStationScreenState extends State<TrafficCheckpointsBy
           width: 48,
           height: 48,
           decoration: BoxDecoration(
-            color: color.withOpacity(0.1),
+            color: isDisabled
+                ? Colors.grey.withOpacity(0.1)
+                : color.withOpacity(0.1),
             borderRadius: BorderRadius.circular(12),
             border: Border.all(
-              color: color.withOpacity(0.2),
+              color: isDisabled
+                  ? Colors.grey.withOpacity(0.2)
+                  : color.withOpacity(0.2),
               width: 1,
             ),
           ),
           child: IconButton(
             icon: Icon(icon, size: 20),
-            color: color,
+            color: isDisabled ? Colors.grey : color,
             onPressed: onPressed,
             padding: EdgeInsets.zero,
           ),
@@ -841,7 +983,7 @@ class _TrafficCheckpointsByStationScreenState extends State<TrafficCheckpointsBy
           label,
           style: TextStyle(
             fontSize: 11,
-            color: color,
+            color: isDisabled ? Colors.grey : color,
             fontWeight: FontWeight.w500,
           ),
           textAlign: TextAlign.center,
