@@ -386,14 +386,21 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
                       ),
                       validator: (value) => value!.isEmpty ? "Badge number is required" : null,
                     ),
-                    const SizedBox(height: AppTheme.spaceM),
-                    DropdownButtonFormField<String>(
+                    const SizedBox(height: AppTheme.spaceM),DropdownButtonFormField<String>(
                       value: _selectedRank,
                       style: AppTheme.bodyLarge,
                       items: _ranks.map((code) {
                         return DropdownMenuItem<String>(
                           value: code["value"],
-                          child: Text(code["label"]!, style: AppTheme.bodyLarge),
+                          child: Container(
+                            constraints: BoxConstraints(maxWidth: 250),
+                            child: Text(
+                              code["label"]!,
+                              style: AppTheme.bodyLarge,
+                              overflow: TextOverflow.ellipsis,
+                              maxLines: 1,
+                            ),
+                          ),
                         );
                       }).toList(),
                       onChanged: (value) => setState(() => _selectedRank = value!),
@@ -402,6 +409,7 @@ class _RegisterPoliceOfficerTabState extends State<RegisterPoliceOfficerTab> {
                         prefixIcon: Icons.military_tech,
                       ),
                       validator: (value) => value == null ? "Rank is required" : null,
+                      isExpanded: true,
                     ),
                     const SizedBox(height: AppTheme.spaceM),
                     widget.preSelectedStationUid != null

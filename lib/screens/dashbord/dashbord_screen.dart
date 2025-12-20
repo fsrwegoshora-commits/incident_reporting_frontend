@@ -33,7 +33,8 @@ class DashboardScreen extends StatefulWidget {
   _DashboardScreenState createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> with TickerProviderStateMixin {
+class _DashboardScreenState extends State<DashboardScreen>
+    with TickerProviderStateMixin {
   DateTime? _currentBackPressTime;
 
   // ============================================================================
@@ -56,6 +57,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // Shifts Data
   List<Map<String, dynamic>> _officerShifts = [];
   bool _isLoadingShifts = false;
+
+  // Add these variables to your state class
+  Map<String, dynamic>? _incidentStats;
+  bool _isLoadingIncidentStats = true;
 
   Timer? _timer;
   Duration _remaining = Duration.zero;
@@ -91,18 +96,22 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     _loadUserData();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final notificationsService = Provider.of<NotificationsService>(context, listen: false);
+      final notificationsService = Provider.of<NotificationsService>(
+        context,
+        listen: false,
+      );
+
       notificationsService.fetchNotifications();
       notificationsService.fetchUnreadCount();
 
-      // Auto refresh every 30 seconds
-      Timer.periodic(Duration(seconds: 30), (_) {
+      Timer.periodic(const Duration(seconds: 30), (_) {
         if (mounted) {
           notificationsService.fetchUnreadCount();
         }
       });
     });
   }
+
 
   // void _toggleTheme() {
   //   final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
@@ -142,7 +151,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
     );
     _pulseAnimation = Tween<double>(begin: 0.95, end: 1.05).animate(
-      CurvedAnimation(parent: _stationsLoadingController, curve: Curves.easeInOut),
+      CurvedAnimation(
+        parent: _stationsLoadingController,
+        curve: Curves.easeInOut,
+      ),
     );
 
     _animationController.forward();
@@ -151,11 +163,151 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // ============================================================================
   // DATA LOADING
   // ============================================================================
+  Future<void> _loadIncidentStats() async {
+    setState(() => _isLoadingIncidentStats = true);
+
+    try {
+      final gql = GraphQLService();
+
+      // -----------------------------
+      // 1️⃣ Choose query by role
+      // -----------------------------
+      String query;
+      Map<String, dynamic> variables = {
+        'pageableParam': {
+          'page': 0,
+          'size': 100,
+          'isActive': true,
+        },
+      };
+
+      if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") {
+        query = getStationIncidentsQuery;
+      } else if (_userRole == "POLICE_OFFICER") {
+        query = getOfficerIncidentsQuery;
+      } else {
+        query = getMyIncidentsQuery;
+      }
+
+      print('📡 Role: $_userRole');
+      print('📡 Query sent');
+
+      // -----------------------------
+      // 2️⃣ Call API
+      // -----------------------------
+      final response = await gql.sendAuthenticatedQuery(query, variables);
+      print('📋 Full Response: $response');
+
+      if (response == null || response['errors'] != null) {
+        print('❌ GraphQL error or null response');
+        _setEmptyStats();
+        return;
+      }
+
+      final data = response['data'];
+      if (data == null) {
+        print('❌ response[data] is NULL');
+        _setEmptyStats();
+        return;
+      }
+
+      // -----------------------------
+      // 3️⃣ SMART FALLBACK (KEY FIX)
+      // -----------------------------
+      final result =
+          data['getStationIncidents'] ??
+              data['getOfficerIncidents'] ??
+              data['getMyIncidents'];
+
+      if (result == null) {
+        print('❌ No incident key found');
+        print('Available keys: ${data.keys}');
+        _setEmptyStats();
+        return;
+      }
+
+      print('✅ Using key: ${result.keys}');
+
+      // -----------------------------
+      // 4️⃣ Validate status
+      // -----------------------------
+      if (result['status'] != 'Success') {
+        print('⚠️ Status not Success: ${result['status']}');
+        _setEmptyStats();
+        return;
+      }
+
+      // -----------------------------
+      // 5️⃣ Extract incidents list
+      // -----------------------------
+      final List incidents =
+      (result['data'] is List) ? result['data'] : [];
+
+      print('✅ Incidents fetched: ${incidents.length}');
+
+      // -----------------------------
+      // 6️⃣ Calculate stats
+      // -----------------------------
+      final int total = incidents.length;
+      final int resolved =
+          incidents.where((i) => i['status'] == 'RESOLVED').length;
+      final int pending =
+          incidents.where((i) => i['status'] == 'PENDING').length;
+      final int inProgress =
+          incidents.where((i) => i['status'] == 'IN_PROGRESS').length;
+
+      // -----------------------------
+      // 7️⃣ Update UI
+      // -----------------------------
+      setState(() {
+        _incidentStats = {
+          'total': total,
+          'resolved': resolved,
+          'pending': pending,
+          'in_progress': inProgress,
+        };
+        _isLoadingIncidentStats = false;
+      });
+
+      print('📊 INCIDENT STATS LOADED');
+      print('Total: $total');
+      print('Resolved: $resolved');
+      print('Pending: $pending');
+      print('In Progress: $inProgress');
+
+    } catch (e, stackTrace) {
+      print('❌ Exception loading incident stats: $e');
+      print(stackTrace);
+      _setEmptyStats();
+    }
+  }
+
+// -----------------------------
+// 🔁 Helper for empty stats
+// -----------------------------
+  void _setEmptyStats() {
+    setState(() {
+      _incidentStats = {
+        'total': 0,
+        'resolved': 0,
+        'pending': 0,
+        'in_progress': 0,
+      };
+      _isLoadingIncidentStats = false;
+    });
+  }
 
   Future<void> _loadUserData() async {
     setState(() => _isLoading = true);
     try {
-      await Future.wait([_loadRole(), _loadUserProfile()]);
+      await Future.wait([
+        _loadRole(),
+        _loadUserProfile(),
+      ]);
+
+      await _loadIncidentStats();
+
+
       if (_userRole == "POLICE_OFFICER" && _officerUid != null) {
         await _fetchOfficerShifts();
       }
@@ -165,7 +317,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       setState(() => _isLoading = false);
     }
   }
-
   Future<void> _loadRole() async {
     final role = await getUserRoleFromToken();
     setState(() => _userRole = role);
@@ -192,9 +343,14 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         _userUid = user['uid'];
       });
 
-      if (_stationUid == null && (_userRole == "STATION_ADMIN" || _userRole == "ROOT")) {
-        final stationResponse = await gql.sendAuthenticatedQuery(getStationsByAdminQuery, {});
-        final stations = stationResponse['data']?['getStationsByAdmin']?['data'];
+      if (_stationUid == null &&
+          (_userRole == "STATION_ADMIN" || _userRole == "ROOT")) {
+        final stationResponse = await gql.sendAuthenticatedQuery(
+          getStationsByAdminQuery,
+          {},
+        );
+        final stations =
+        stationResponse['data']?['getStationsByAdmin']?['data'];
         if (stations != null && stations.isNotEmpty) {
           setState(() {
             _stationUid = stations[0]['uid'];
@@ -215,16 +371,15 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         getShiftsByOfficerQuery,
         {
           'policeOfficerUid': _officerUid,
-          'pageableParam': {
-            'page': 0,
-            'size': 10,
-          },
+          'pageableParam': {'page': 0, 'size': 10},
         },
       );
 
       if (response.containsKey('errors')) return;
 
-      final shifts = response['data']?['getShiftsByPoliceOfficer']?['data'] as List<dynamic>?;
+      final shifts =
+      response['data']?['getShiftsByPoliceOfficer']?['data']
+      as List<dynamic>?;
       if (shifts != null) {
         setState(() => _officerShifts = shifts.cast<Map<String, dynamic>>());
       }
@@ -241,7 +396,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
   void _setupNotifications() {
     try {
-      _notificationsService = Provider.of<NotificationsService>(context, listen: false);
+      _notificationsService = Provider.of<NotificationsService>(
+        context,
+        listen: false,
+      );
 
       // Fetch initial notifications
       _notificationsService?.fetchNotifications();
@@ -310,7 +468,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
   Future<void> _getLocationName(double latitude, double longitude) async {
     try {
-      List<Placemark> placemarks = await placemarkFromCoordinates(latitude, longitude);
+      List<Placemark> placemarks = await placemarkFromCoordinates(
+        latitude,
+        longitude,
+      );
       if (placemarks.isNotEmpty) {
         final place = placemarks[0];
         List<String> parts = [];
@@ -319,7 +480,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         if (place.locality?.isNotEmpty == true) parts.add(place.locality!);
 
         setState(() {
-          _currentLocationName = parts.isNotEmpty ? parts.join(', ') : 'Current Location';
+          _currentLocationName =
+          parts.isNotEmpty ? parts.join(', ') : 'Current Location';
         });
       }
     } catch (e) {
@@ -333,7 +495,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     // Check if this is the first time back button is pressed
     if (_currentBackPressTime == null ||
         now.difference(_currentBackPressTime!) > Duration(seconds: 2)) {
-
       _currentBackPressTime = now;
 
       // Show snackbar message
@@ -351,7 +512,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     // If pressed twice within 2 seconds, exit app
     return true;
   }
-  Future<void> _fetchNearbyPoliceStations(double latitude, double longitude) async {
+
+  Future<void> _fetchNearbyPoliceStations(
+      double latitude,
+      double longitude,
+      ) async {
     try {
       final gql = GraphQLService();
       final response = await gql.sendAuthenticatedQuery(
@@ -374,7 +539,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         return;
       }
 
-      final stations = response['data']?['getNearbyPoliceStations']?['data'] as List<dynamic>?;
+      final stations =
+      response['data']?['getNearbyPoliceStations']?['data']
+      as List<dynamic>?;
 
       if (mounted) {
         setState(() {
@@ -384,7 +551,6 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       }
 
       print('✅ Loaded ${_nearbyStations.length} stations');
-
     } catch (e) {
       print('❌ Error loading stations: $e');
       if (mounted) {
@@ -425,7 +591,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ReportIncidentScreen(
+        builder:
+            (context) => ReportIncidentScreen(
           selectedStation: station,
           userPosition: _currentPosition!,
         ),
@@ -438,13 +605,19 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
   void _openUserManagement() {
     if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => UserManagementScreen()));
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => UserManagementScreen()),
+      );
     }
   }
 
   void _openPoliceStationManagement() {
     if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") {
-      Navigator.push(context, MaterialPageRoute(builder: (_) => PoliceStationManagementScreen()));
+      Navigator.push(
+        context,
+        MaterialPageRoute(builder: (_) => PoliceStationManagementScreen()),
+      );
     }
   }
 
@@ -462,11 +635,17 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   void _openStationIncidents() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => OfficerIncidentsScreen()));
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => OfficerIncidentsScreen()),
+    );
   }
 
   void _openOfficerIncidents() {
-    Navigator.push(context, MaterialPageRoute(builder: (_) => OfficerIncidentsScreen()));
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => OfficerIncidentsScreen()),
+    );
   }
 
   // ============================================================================
@@ -476,7 +655,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   void _showDeleteAccountDialog() {
     showDialog(
       context: context,
-      builder: (context) => Dialog(
+      builder:
+          (context) => Dialog(
         backgroundColor: Colors.transparent,
         child: Container(
           padding: EdgeInsets.all(24),
@@ -542,7 +722,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     _buildWarningPoint('Your profile will be deleted'),
-                    _buildWarningPoint('All your incidents will be removed'),
+                    _buildWarningPoint(
+                      'All your incidents will be removed',
+                    ),
                     _buildWarningPoint('You cannot recover your account'),
                   ],
                 ),
@@ -611,7 +793,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => WillPopScope(
+      builder:
+          (context) => WillPopScope(
         onWillPop: () async => false,
         child: Center(
           child: Container(
@@ -642,7 +825,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
     try {
       final gql = GraphQLService();
-      final response = await gql.sendAuthenticatedQuery(deleteMyAccountMutation, {});
+      final response = await gql.sendAuthenticatedQuery(
+        deleteMyAccountMutation,
+        {},
+      );
 
       // Close loading dialog
       if (mounted) Navigator.pop(context);
@@ -651,7 +837,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
       // Check for GraphQL errors
       if (response.containsKey('errors')) {
-        final errorMessage = response['errors'][0]['message'] ?? 'Failed to delete account';
+        final errorMessage =
+            response['errors'][0]['message'] ?? 'Failed to delete account';
         _showSnackBar(errorMessage, isError: true);
         return;
       }
@@ -677,9 +864,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
         // 🔥 NAVIGATE DIRECTLY - NO DIALOG
         _navigateToRegisterScreen();
-
       } else {
-        _showSnackBar(message.isNotEmpty ? message : 'Failed to delete account', isError: true);
+        _showSnackBar(
+          message.isNotEmpty ? message : 'Failed to delete account',
+          isError: true,
+        );
       }
     } catch (e) {
       print('❌ Delete Account Error: $e');
@@ -692,7 +881,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     }
   }
 
-// 🔥 SIMPLE NAVIGATION WITHOUT DIALOG
+  // 🔥 SIMPLE NAVIGATION WITHOUT DIALOG
   void _navigateToRegisterScreen() {
     Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
       MaterialPageRoute(builder: (context) => RegisterScreen()),
@@ -729,12 +918,18 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
   String _getRoleDisplayName(String? role) {
     switch (role) {
-      case "CITIZEN": return "Citizen";
-      case "ROOT": return "Admin";
-      case "POLICE_OFFICER": return "Officer";
-      case "STATION_ADMIN": return "Admin";
-      case "AGENCY_REP": return "Agency";
-      default: return "User";
+      case "CITIZEN":
+        return "Citizen";
+      case "ROOT":
+        return "Admin";
+      case "POLICE_OFFICER":
+        return "Officer";
+      case "STATION_ADMIN":
+        return "Admin";
+      case "AGENCY_REP":
+        return "Agency";
+      default:
+        return "User";
     }
   }
 
@@ -765,7 +960,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         }
 
         // Get latest notifications
-        final unreadNotifications = service.getUnreadNotifications().take(3).toList();
+        final unreadNotifications =
+        service.getUnreadNotifications().take(3).toList();
 
         return Container(
           margin: EdgeInsets.symmetric(horizontal: 20, vertical: 12),
@@ -831,7 +1027,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   GestureDetector(
                     onTap: _openNotifications,
                     child: Container(
-                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(8),
@@ -851,10 +1050,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
               if (unreadNotifications.isNotEmpty) ...[
                 SizedBox(height: 12),
-                Container(
-                  height: 1,
-                  color: Colors.white.withOpacity(0.1),
-                ),
+                Container(height: 1, color: Colors.white.withOpacity(0.1)),
                 SizedBox(height: 12),
                 ...unreadNotifications.map((notification) {
                   return Padding(
@@ -915,10 +1111,13 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     return Consumer<NotificationsService>(
       builder: (context, service, _) {
         // Check for urgent notifications
-        final urgentNotifications = service.notifications
-            .where((n) =>
-                n.type.toUpperCase().contains('INCIDENT') ||
-                n.type.toUpperCase().contains('ASSIGNED'))
+        final urgentNotifications =
+        service.notifications
+            .where(
+              (n) =>
+          n.type.toUpperCase().contains('INCIDENT') ||
+              n.type.toUpperCase().contains('ASSIGNED'),
+        )
             .where((n) => !n.isRead)
             .toList();
 
@@ -932,9 +1131,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           decoration: BoxDecoration(
             color: Color(0xFFFF6B6B).withOpacity(0.1),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: Color(0xFFFF6B6B).withOpacity(0.3),
-            ),
+            border: Border.all(color: Color(0xFFFF6B6B).withOpacity(0.3)),
           ),
           child: Row(
             children: [
@@ -1022,7 +1219,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                     color: Colors.white,
                     borderRadius: BorderRadius.circular(12),
                     border: Border.all(
-                      color: notification.isRead ? Color(0xFFE8EBF0) : notification.getTypeColor().withOpacity(0.2),
+                      color:
+                      notification.isRead
+                          ? Color(0xFFE8EBF0)
+                          : notification.getTypeColor().withOpacity(0.2),
                     ),
                   ),
                   child: Row(
@@ -1123,7 +1323,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                     ),
                     child: Column(
                       children: [
-                        Icon(Icons.warning_rounded, color: Colors.white, size: 24),
+                        Icon(
+                          Icons.warning_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
                         SizedBox(height: 8),
                         Text(
                           'Report Incident',
@@ -1152,7 +1356,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                     ),
                     child: Column(
                       children: [
-                        Icon(Icons.notifications_rounded, color: Colors.white, size: 24),
+                        Icon(
+                          Icons.notifications_rounded,
+                          color: Colors.white,
+                          size: 24,
+                        ),
                         SizedBox(height: 8),
                         Text(
                           'Notifications',
@@ -1188,9 +1396,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         key: _scaffoldKey,
         backgroundColor: Theme.of(context).scaffoldBackgroundColor,
 
-        drawer: Drawer(
-          child: _buildProfileDrawer(),
-        ),
+        drawer: Drawer(child: _buildProfileDrawer()),
 
         body: SafeArea(
           child: RefreshIndicator(
@@ -1209,7 +1415,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
 
                         if (_userRole == "POLICE_OFFICER")
                           _buildShiftsSection()
-                        else if (_userRole == "STATION_ADMIN" || _userRole == "ROOT")
+                        else if (_userRole == "STATION_ADMIN" ||
+                            _userRole == "ROOT")
                           _buildAdminSection()
                         else if (_userRole == "CITIZEN")
                             _buildCitizenContent(),
@@ -1225,10 +1432,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   left: 0,
                   right: 0,
                   child: Column(
-                    children: [
-                      _buildHeader(),
-                      _buildBalanceCard(),
-                    ],
+                    children: [_buildHeader(), _buildBalanceCard()],
                   ),
                 ),
               ],
@@ -1260,7 +1464,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               height: 48,
               decoration: BoxDecoration(
                 gradient: LinearGradient(
-                  colors: [AppTheme.primaryBlue, AppTheme.primaryBlue.withOpacity(0.7)],
+                  colors: [
+                    AppTheme.primaryBlue,
+                    AppTheme.primaryBlue.withOpacity(0.7),
+                  ],
                 ),
                 shape: BoxShape.circle,
               ),
@@ -1374,7 +1581,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                       width: 40,
                       height: 40,
                       decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primary.withOpacity(0.1),
+                        color: Theme.of(
+                          context,
+                        ).colorScheme.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(
@@ -1390,7 +1599,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                       top: 0,
                       child: Container(
                         padding: EdgeInsets.all(4),
-                        constraints: BoxConstraints(minWidth: 18, minHeight: 18),
+                        constraints: BoxConstraints(
+                          minWidth: 18,
+                          minHeight: 18,
+                        ),
                         decoration: BoxDecoration(
                           color: Color(0xFFFF6B6B),
                           shape: BoxShape.circle,
@@ -1403,7 +1615,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                           ],
                         ),
                         child: Text(
-                          service.unreadCount > 99 ? '99+' : '${service.unreadCount}',
+                          service.unreadCount > 99
+                              ? '99+'
+                              : '${service.unreadCount}',
                           style: GoogleFonts.poppins(
                             fontSize: 9,
                             fontWeight: FontWeight.bold,
@@ -1426,6 +1640,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // ============================================================================
 
   Widget _buildBalanceCard() {
+    // Calculate active incidents (non-resolved)
+    final activeIncidents = (_incidentStats?['pending'] ?? 0) +
+        (_incidentStats?['in_progress'] ?? 0);
+
     return Container(
       margin: EdgeInsets.fromLTRB(20, 0, 20, 24),
       padding: EdgeInsets.all(20),
@@ -1433,10 +1651,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFF2E5BFF),
-            Color(0xFF1E3A8A),
-          ],
+          colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
         ),
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
@@ -1458,20 +1673,67 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   color: Colors.white.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(8),
                 ),
-                child: Icon(Icons.shield_rounded, color: Colors.white, size: 20),
-              ),
-              SizedBox(width: 10),
-              Text(
-                'Smart Incident',
-                style: GoogleFonts.poppins(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withOpacity(0.9),
+                child: _isLoadingIncidentStats
+                    ? SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+                    : Icon(
+                  Icons.shield_rounded,
+                  color: Colors.white,
+                  size: 20,
                 ),
               ),
+              SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Smart Incident',
+                      style: GoogleFonts.poppins(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                        color: Colors.white.withOpacity(0.9),
+                      ),
+                    ),
+                    if (!_isLoadingIncidentStats)
+                      Text(
+                        '${_incidentStats?['total'] ?? 0} total incidents',
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.white.withOpacity(0.7),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+              if (!_isLoadingIncidentStats)
+                GestureDetector(
+                  onTap: () => setState(() => _balanceVisible = !_balanceVisible),
+                  child: Container(
+                    padding: EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Icon(
+                      _balanceVisible
+                          ? Icons.visibility_outlined
+                          : Icons.visibility_off_outlined,
+                      color: Colors.white.withOpacity(0.7),
+                      size: 16,
+                    ),
+                  ),
+                ),
             ],
           ),
           SizedBox(height: 20),
+
           Text(
             'Active Incidents',
             style: GoogleFonts.poppins(
@@ -1480,10 +1742,13 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             ),
           ),
           SizedBox(height: 4),
-          Row(
+
+          // Show loading or actual data
+          _isLoadingIncidentStats
+              ? Row(
             children: [
               Text(
-                _balanceVisible ? '7' : '•••',
+                '•••',
                 style: GoogleFonts.poppins(
                   fontSize: 32,
                   fontWeight: FontWeight.w700,
@@ -1492,33 +1757,91 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 ),
               ),
               SizedBox(width: 12),
-              GestureDetector(
-                onTap: () => setState(() => _balanceVisible = !_balanceVisible),
-                child: Icon(
-                  _balanceVisible ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                  color: Colors.white.withOpacity(0.7),
-                  size: 20,
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
                 ),
               ),
             ],
-          ),
-          SizedBox(height: 20),
-          Row(
+          )
+              : Row(
             children: [
-              _buildStatItem(Icons.check_circle_outline, 'Resolved', '5'),
-              SizedBox(width: 24),
-              _buildStatItem(Icons.pending_outlined, 'Pending', '2'),
+              Text(
+                _balanceVisible ? '$activeIncidents' : '•••',
+                style: GoogleFonts.poppins(
+                  fontSize: 32,
+                  fontWeight: FontWeight.w700,
+                  color: Colors.white,
+                  letterSpacing: 2,
+                ),
+              ),
+              SizedBox(width: 12),
+              if (_balanceVisible)
+                Container(
+                  padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: activeIncidents > 0
+                        ? Color(0xFFFF6B6B).withOpacity(0.2)
+                        : Color(0xFF10B981).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: activeIncidents > 0
+                          ? Color(0xFFFF6B6B).withOpacity(0.4)
+                          : Color(0xFF10B981).withOpacity(0.4),
+                    ),
+                  ),
+                  child: Text(
+                    activeIncidents > 0 ? 'NEEDS ATTENTION' : 'ALL CLEAR',
+                    style: GoogleFonts.poppins(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: activeIncidents > 0
+                          ? Color(0xFFFF6B6B)
+                          : Color(0xFF10B981),
+                    ),
+                  ),
+                ),
             ],
           ),
+
+          SizedBox(height: 20),
+
+          if (!_isLoadingIncidentStats)
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween, // ← Tumia spaceBetween
+              children: [
+                _buildStatItem(
+                  Icons.check_circle_outline,
+                  'Resolved',
+                  '${_incidentStats?['resolved'] ?? 0}',
+                  color: Color(0xFF10B981),
+                ),
+                _buildStatItem(
+                  Icons.pending_outlined,
+                  'Pending',
+                  '${_incidentStats?['pending'] ?? 0}',
+                  color: Color(0xFFFFB75E),
+                ),
+                _buildStatItem(
+                  Icons.timelapse_rounded,
+                  'In Progress',
+                  '${_incidentStats?['in_progress'] ?? 0}',
+                  color: Color(0xFF2E5BFF),
+                ),
+              ],
+            ),
         ],
       ),
     );
   }
 
-  Widget _buildStatItem(IconData icon, String label, String value) {
+  Widget _buildStatItem(IconData icon, String label, String value, {Color? color}) {
     return Row(
       children: [
-        Icon(icon, color: Colors.white.withOpacity(0.7), size: 16),
+        Icon(icon, color: color ?? Colors.white.withOpacity(0.7), size: 16),
         SizedBox(width: 6),
         Text(
           value,
@@ -1564,43 +1887,46 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 children: [
                   Text(
                     'My Shifts',
-                style: GoogleFonts.poppins(
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1A1F36),
-                ),
-              ),
-              Spacer(),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryBlue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Text(
-                  '${_officerShifts.length} total',
-                  style: GoogleFonts.poppins(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w700,
-                    color: AppTheme.primaryBlue,
+                    style: GoogleFonts.poppins(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: Color(0xFF1A1F36),
+                    ),
                   ),
-                ),
+                  Spacer(),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: AppTheme.primaryBlue.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Text(
+                      '${_officerShifts.length} total',
+                      style: GoogleFonts.poppins(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                        color: AppTheme.primaryBlue,
+                      ),
+                    ),
+                  ),
+                ],
               ),
-            ],
-          ),
-          SizedBox(height: 16),
+              SizedBox(height: 16),
 
-          // Shifts List
-          if (_isLoadingShifts)
-            _buildShiftsLoading()
-          else if (_officerShifts.isEmpty)
-            _buildNoShifts()
-          else
-            ..._officerShifts.take(3).map((shift) => _buildImprovedShiftCard(shift)).toList(),
+              // Shifts List
+              if (_isLoadingShifts)
+                _buildShiftsLoading()
+              else if (_officerShifts.isEmpty)
+                _buildNoShifts()
+              else
+                ..._officerShifts
+                    .take(3)
+                    .map((shift) => _buildImprovedShiftCard(shift))
+                    .toList(),
 
-          // Officer Incidents Card - ADD THIS SECTION
-          SizedBox(height: 24),
-          _buildOfficerIncidentsCard(),
+              // Officer Incidents Card - ADD THIS SECTION
+              SizedBox(height: 24),
+              _buildOfficerIncidentsCard(),
             ],
           ),
         ),
@@ -1617,7 +1943,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     final isExcused = shift['isExcused'] ?? false;
     final isPunishment = shift['isPunishmentMode'] ?? false;
 
-    final isCurrentShift = _currentShift != null && _currentShift!['uid'] == shift['uid'];
+    final isCurrentShift =
+        _currentShift != null && _currentShift!['uid'] == shift['uid'];
     final isOffShift = shiftTime.toUpperCase() == 'OFF';
     final isPastShift = _isShiftInPast(shiftDate);
 
@@ -1638,7 +1965,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           color: statusInfo['borderColor'],
           width: statusInfo['isActive'] ? 2 : 1,
         ),
-        boxShadow: statusInfo['isActive']
+        boxShadow:
+        statusInfo['isActive']
             ? [
           BoxShadow(
             color: statusInfo['accentColor'].withOpacity(0.3),
@@ -1692,19 +2020,27 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                                   style: GoogleFonts.poppins(
                                     fontSize: 14,
                                     fontWeight: FontWeight.w700,
-                                    color: statusInfo['isCompleted']
+                                    color:
+                                    statusInfo['isCompleted']
                                         ? Color(0xFF1A1F36).withOpacity(0.5)
                                         : Color(0xFF1A1F36),
                                   ),
                                 ),
                               ),
                               Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 4,
+                                ),
                                 decoration: BoxDecoration(
-                                  color: statusInfo['badgeColor'].withOpacity(0.15),
+                                  color: statusInfo['badgeColor'].withOpacity(
+                                    0.15,
+                                  ),
                                   borderRadius: BorderRadius.circular(8),
                                   border: Border.all(
-                                    color: statusInfo['badgeColor'].withOpacity(0.3),
+                                    color: statusInfo['badgeColor'].withOpacity(
+                                      0.3,
+                                    ),
                                   ),
                                 ),
                                 child: Text(
@@ -1723,14 +2059,18 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                             _formatShiftDate(shiftDate),
                             style: GoogleFonts.poppins(
                               fontSize: 11,
-                              color: statusInfo['isCompleted']
+                              color:
+                              statusInfo['isCompleted']
                                   ? Color(0xFF8F9BB3).withOpacity(0.6)
                                   : Color(0xFF8F9BB3),
                             ),
                           ),
                           SizedBox(height: 6),
                           Container(
-                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                            padding: EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 4,
+                            ),
                             decoration: BoxDecoration(
                               color: statusInfo['accentColor'].withOpacity(0.1),
                               borderRadius: BorderRadius.circular(6),
@@ -1755,7 +2095,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: statusInfo['isCompleted']
+                      color:
+                      statusInfo['isCompleted']
                           ? Color(0xFFF8F9FC).withOpacity(0.5)
                           : Color(0xFFF8F9FC),
                       borderRadius: BorderRadius.circular(10),
@@ -1765,7 +2106,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         Icon(
                           Icons.access_time_rounded,
                           size: 16,
-                          color: statusInfo['isCompleted']
+                          color:
+                          statusInfo['isCompleted']
                               ? Color(0xFF8F9BB3).withOpacity(0.5)
                               : Color(0xFF8F9BB3),
                         ),
@@ -1775,13 +2117,17 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                           style: GoogleFonts.poppins(
                             fontSize: 13,
                             fontWeight: FontWeight.w600,
-                            color: statusInfo['isCompleted']
+                            color:
+                            statusInfo['isCompleted']
                                 ? Color(0xFF1A1F36).withOpacity(0.5)
                                 : Color(0xFF1A1F36),
                           ),
                         ),
                         Spacer(),
-                        _buildDaysIndicator(shiftDate, statusInfo['isCompleted']),
+                        _buildDaysIndicator(
+                          shiftDate,
+                          statusInfo['isCompleted'],
+                        ),
                       ],
                     ),
                   ),
@@ -1793,7 +2139,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                     padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
                     decoration: BoxDecoration(
                       gradient: LinearGradient(
-                        colors: [AppTheme.successGreen, AppTheme.successGreen.withOpacity(0.8)],
+                        colors: [
+                          AppTheme.successGreen,
+                          AppTheme.successGreen.withOpacity(0.8),
+                        ],
                       ),
                       borderRadius: BorderRadius.circular(8),
                     ),
@@ -1881,7 +2230,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         'icon': Icons.warning_rounded,
         'accentColor': AppTheme.errorRed,
         'badgeColor': AppTheme.errorRed,
-        'bgColor': isPastShift ? Colors.white : AppTheme.errorRed.withOpacity(0.05),
+        'bgColor':
+        isPastShift ? Colors.white : AppTheme.errorRed.withOpacity(0.05),
         'borderColor': AppTheme.errorRed.withOpacity(0.2),
         'isActive': false,
         'isCompleted': isPastShift,
@@ -2007,7 +2357,20 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   }
 
   String _formatDate(DateTime date) {
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final months = [
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec',
+    ];
     return '${months[date.month - 1]} ${date.day}';
   }
 
@@ -2019,7 +2382,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   bool _isShiftInPast(String dateString) {
     try {
       final shiftDate = DateTime.parse(dateString);
-      final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+      final today = DateTime(
+        DateTime.now().year,
+        DateTime.now().month,
+        DateTime.now().day,
+      );
       final shiftDay = DateTime(shiftDate.year, shiftDate.month, shiftDate.day);
       return shiftDay.isBefore(today);
     } catch (e) {
@@ -2034,9 +2401,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
       ),
-      child: Center(
-        child: CircularProgressIndicator(strokeWidth: 2),
-      ),
+      child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
     );
   }
 
@@ -2068,194 +2433,914 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // UI COMPONENTS - Admin Section
   // ============================================================================
   Widget _buildAdminSection() {
-    // 🔴 ONLY SHOW FOR ROOT USERS
     final isRoot = _userRole == "ROOT";
+    final isStationAdmin = _userRole == "STATION_ADMIN";
 
-    return Container(
-      margin: EdgeInsets.fromLTRB(20, 24, 20, 0),
+    return SingleChildScrollView(
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Alert Banner for urgent notifications
-          _buildAlertBanner(),
-
-          // Notifications Summary Card
-          _buildNotificationsSummaryCard(),
-
           // ====================================================================
-          // ADMIN TOOLS HEADER
+          // WELCOME HEADER (DIFFERENT FOR ROOT VS STATION ADMIN)
           // ====================================================================
-          Text(
-            'Admin Dashboard',
-            style: GoogleFonts.poppins(
-              fontSize: 16,
-              fontWeight: FontWeight.w700,
-              color: Color(0xFF1A1F36),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: isRoot
+                    ? [Color(0xFF6366F1), Color(0xFF8B5CF6)] // Purple for ROOT
+                    : [Color(0xFF10B981), Color(0xFF34D399)], // Green for Station Admin
+              ),
+              borderRadius: BorderRadius.only(
+                bottomLeft: Radius.circular(24),
+                bottomRight: Radius.circular(24),
+              ),
             ),
-          ),
-          SizedBox(height: 16),
-
-          // ====================================================================
-          // ROOT ONLY - ORGANIZATION MANAGEMENT (Agency & Department)
-          // ====================================================================
-          if (isRoot)
-            Column(
+            child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // Organization Management Section Header
                 Row(
                   children: [
                     Container(
-                      padding: EdgeInsets.all(10),
+                      padding: EdgeInsets.all(12),
                       decoration: BoxDecoration(
-                        color: Color(0xFFFF6B6B).withOpacity(0.1),
-                        borderRadius: BorderRadius.circular(10),
+                        color: Colors.white.withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(12),
                       ),
                       child: Icon(
-                        Icons.domain_rounded,
-                        color: Color(0xFFFF6B6B),
-                        size: 20,
+                        isRoot ? Icons.admin_panel_settings_rounded : Icons.security_rounded,
+                        color: Colors.white,
+                        size: 28,
+                      ),
+                    ),
+                    SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            isRoot ? 'System Dashboard' : 'Station Dashboard',
+                            style: GoogleFonts.poppins(
+                              fontSize: 22,
+                              fontWeight: FontWeight.w700,
+                              color: Colors.white,
+                            ),
+                          ),
+                          SizedBox(height: 4),
+                          Text(
+                            isRoot
+                                ? 'Full System Administrator Access'
+                                : '${_stationName ?? "Your Station"} Management',
+                            style: GoogleFonts.poppins(
+                              fontSize: 14,
+                              color: Colors.white.withOpacity(0.9),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 16),
+
+                // Stats Row - ONLY FOR ROOT ADMIN
+                if (isRoot) ...[
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildStatCard(
+                          icon: Icons.people_outline_rounded,
+                          value: '${_getTotalUsersCount()}', // Dynamic count
+                          label: 'Total Users',
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: _buildStatCard(
+                          icon: Icons.location_city_rounded,
+                          value: '${_getTotalStationsCount()}', // Dynamic count
+                          label: 'All Stations',
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: _buildStatCard(
+                          icon: Icons.description_rounded,
+                          value: '48',
+                          label: 'Total Reports',
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ] else if (isStationAdmin) ...[
+                  // Station Admin Stats - ONLY THEIR STATION DATA
+                  Row(
+                    children: [
+                      Expanded(
+                        child: _buildStatCard(
+                          icon: Icons.people_outline_rounded,
+                          value: '${_getStationUsersCount()}', // Only station users
+                          label: 'Station Officers',
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: _buildStatCard(
+                          icon: Icons.description_rounded,
+                          value: '${_getStationIncidentsCount()}', // Only station incidents
+                          label: 'Active Incidents',
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: _buildStatCard(
+                          icon: Icons.access_time_rounded,
+                          value: '${_getOnDutyCount()}',
+                          label: 'On Duty',
+                          color: Colors.white.withOpacity(0.9),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          SizedBox(height: 24),
+
+          // ====================================================================
+          // ROOT ADMIN ONLY - ORGANIZATION MANAGEMENT
+          // ====================================================================
+          if (isRoot) ...[
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: 20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        width: 4,
+                        height: 20,
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Color(0xFFFF6B6B), Color(0xFFFF8E8E)],
+                          ),
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Text(
+                        'System Administration',
+                        style: GoogleFonts.poppins(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1F2937),
+                        ),
+                      ),
+                      Spacer(),
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Color(0xFFFF6B6B).withOpacity(0.1),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          'ROOT ACCESS',
+                          style: GoogleFonts.poppins(
+                            fontSize: 10,
+                            fontWeight: FontWeight.w800,
+                            color: Color(0xFFFF6B6B),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 16),
+
+                  // Organization Cards - ONLY FOR ROOT
+                  Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: [
+                          Color(0xFFFFF5F5),
+                          Color(0xFFFFF1F0),
+                        ],
+                      ),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(
+                        color: Color(0xFFFFE4E6),
+                        width: 1.5,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        Row(
+                          children: [
+                            Container(
+                              padding: EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [Color(0xFFFF6B6B), Color(0xFFFF8E8E)],
+                                ),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: Icon(
+                                Icons.admin_panel_settings_rounded,
+                                color: Colors.white,
+                                size: 22,
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Full System Control',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: Color(0xFF1F2937),
+                                    ),
+                                  ),
+                                  Text(
+                                    'Manage entire system hierarchy',
+                                    style: GoogleFonts.poppins(
+                                      fontSize: 12,
+                                      color: Color(0xFFFF6B6B),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 16),
+
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildModernAdminCard(
+                                icon: Icons.business_center_rounded,
+                                title: 'Agencies',
+                                subtitle: 'System-wide agencies',
+                                color: Color(0xFF6366F1),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => AgencyManagementScreen(),
+                                  ),
+                                ),
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFF6366F1),
+                                    Color(0xFF8B5CF6),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: _buildModernAdminCard(
+                                icon: Icons.dashboard_rounded,
+                                title: 'Departments',
+                                subtitle: 'All departments',
+                                color: Color(0xFF10B981),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => DepartmentManagementScreen(),
+                                  ),
+                                ),
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFF10B981),
+                                    Color(0xFF34D399),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(height: 12),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: _buildModernAdminCard(
+                                icon: Icons.settings_suggest_rounded,
+                                title: 'System',
+                                subtitle: 'Global settings',
+                                color: Color(0xFF8B5CF6),
+                                onTap: () => Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => AdminSettingsScreen(),
+                                  ),
+                                ),
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFF8B5CF6),
+                                    Color(0xFFA78BFA),
+                                  ],
+                                ),
+                              ),
+                            ),
+                            SizedBox(width: 12),
+                            Expanded(
+                              child: _buildModernAdminCard(
+                                icon: Icons.analytics_rounded,
+                                title: 'Analytics',
+                                subtitle: 'System reports',
+                                color: Color(0xFFEC4899),
+                                onTap: () {
+                                  _showSnackBar('System analytics dashboard');
+                                },
+                                gradient: LinearGradient(
+                                  colors: [
+                                    Color(0xFFEC4899),
+                                    Color(0xFFF472B6),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                  SizedBox(height: 32),
+                ],
+              ),
+            ),
+          ],
+
+          // ====================================================================
+          // STATION MANAGEMENT SECTION (FOR BOTH ROOT AND STATION ADMINS)
+          // ====================================================================
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 4,
+                      height: 20,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: isRoot
+                              ? [Color(0xFF3B82F6), Color(0xFF60A5FA)]
+                              : [Color(0xFF10B981), Color(0xFF34D399)],
+                        ),
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                    SizedBox(width: 8), // ← Punguza
+                    Expanded( // ← ADD THIS
+                      child: Text(
+                        isRoot ? 'Station Oversight' : 'My Station Management',
+                        style: GoogleFonts.poppins(
+                          fontSize: 16, // ← Punguza ukubwa kidogo
+                          fontWeight: FontWeight.w700,
+                          color: Color(0xFF1F2937),
+                        ),
+                        overflow: TextOverflow.ellipsis, // ← ADD THIS
+                        maxLines: 1, // ← ADD THIS
+                      ),
+                    ),
+                    if (isStationAdmin && _stationName != null) ...[
+                      SizedBox(width: 8), // ← Punguza
+                      Flexible( // ← Badilisha Container kuwa Flexible
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4), // ← Punguza padding
+                          decoration: BoxDecoration(
+                            color: Color(0xFF10B981).withOpacity(0.1),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            _stationName!,
+                            style: GoogleFonts.poppins(
+                              fontSize: 10, // ← Punguza kidogo
+                              fontWeight: FontWeight.w600,
+                              color: Color(0xFF10B981),
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                SizedBox(height: 16),
+
+                // Grid for Station Management
+                GridView.count(
+                  crossAxisCount: 2,
+                  shrinkWrap: true,
+                  physics: NeverScrollableScrollPhysics(),
+                  mainAxisSpacing: 16,
+                  crossAxisSpacing: 16,
+                  childAspectRatio: 0.85,
+                  children: [
+                    // Users Management Card
+                    _buildModernAdminCard(
+                      icon: Icons.people_alt_rounded,
+                      title: isRoot ? 'All Users' : 'My Officers',
+                      subtitle: isRoot
+                          ? 'Manage all system users'
+                          : 'Manage station personnel',
+                      color: Color(0xFF10B981),
+                      onTap: _openUserManagement,
+                      gradient: LinearGradient(
+                        colors: [
+                          Color(0xFF10B981),
+                          Color(0xFF34D399),
+                        ],
+                      ),
+                    ),
+
+                    // Police Stations Card
+                    _buildModernAdminCard(
+                      icon: Icons.location_city_rounded,
+                      title: isRoot ? 'All Stations' : 'My Station',
+                      subtitle: isRoot
+                          ? 'All police stations'
+                          : 'Station details & settings',
+                      color: Color(0xFFF59E0B),
+                      gradient: LinearGradient(
+                        colors: [
+                          Color(0xFFF59E0B),
+                          Color(0xFFFBBF24),
+                        ],
+                      ),
+                      onTap: _openPoliceStationManagement,
+                    ),
+
+                    // Incidents Card
+                    _buildModernAdminCard(
+                      icon: Icons.description_rounded,
+                      title: isRoot ? 'All Incidents' : 'Station Incidents',
+                      subtitle: isRoot
+                          ? 'View all system incidents'
+                          : 'View station reports',
+                      color: Color(0xFF8B5CF6),
+                      onTap: _openStationIncidents,
+                      gradient: LinearGradient(
+                        colors: [
+                          Color(0xFF8B5CF6),
+                          Color(0xFFA78BFA),
+                        ],
+                      ),
+                    ),
+
+                    // Shifts & Schedule Card
+                    _buildModernAdminCard(
+                      icon: Icons.schedule_rounded,
+                      title: 'Shifts',
+                      subtitle: isRoot
+                          ? 'View all shifts'
+                          : 'Manage station shifts',
+                      color: Color(0xFFEC4899),
+                      onTap: () {
+                        if (isRoot) {
+                          _showSnackBar('Viewing all station shifts');
+                        } else {
+                          _showSnackBar('Managing ${_stationName ?? "station"} shifts');
+                        }
+                      },
+                      gradient: LinearGradient(
+                        colors: [
+                          Color(0xFFEC4899),
+                          Color(0xFFF472B6),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          SizedBox(height: 24),
+
+          // ====================================================================
+          // QUICK ACTIONS (DIFFERENT FOR ROOT VS STATION ADMIN)
+          // ====================================================================
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'Quick Actions',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Color(0xFF1F2937),
                       ),
                     ),
                     SizedBox(width: 12),
-                    Text(
-                      'Organization Setup',
-                      style: GoogleFonts.poppins(
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                        color: Color(0xFF1A1F36),
-                      ),
-                    ),
-                    Spacer(),
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
-                        color: Color(0xFFFF6B6B).withOpacity(0.1),
+                        color: isRoot
+                            ? Color(0xFF6366F1).withOpacity(0.1)
+                            : Color(0xFF10B981).withOpacity(0.1),
                         borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        'ROOT ONLY',
+                        isRoot ? 'SYSTEM' : 'STATION',
                         style: GoogleFonts.poppins(
-                          fontSize: 9,
-                          fontWeight: FontWeight.w700,
-                          color: Color(0xFFFF6B6B),
+                          fontSize: 10,
+                          fontWeight: FontWeight.w800,
+                          color: isRoot ? Color(0xFF6366F1) : Color(0xFF10B981),
                         ),
                       ),
                     ),
                   ],
                 ),
-                SizedBox(height: 12),
+                SizedBox(height: 16),
 
-                // Agency & Department Management Cards (2 columns)
-                Row(
-                  children: [
-                    Expanded(
-                      child: _buildAdminCard(
-                        icon: Icons.business_rounded,
-                        title: 'Manage\nAgencies',
-                        subtitle: 'Create & edit agencies',
-                        color: Color(0xFF2E5BFF),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => AgencyManagementScreen(),
-                          ),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      if (isRoot) ...[
+                        _buildQuickActionButton(
+                          icon: Icons.add_chart_rounded,
+                          label: 'System\nReport',
+                          color: Color(0xFF6366F1),
+                          onTap: () {
+                            _showSnackBar('Generating system-wide report');
+                          },
                         ),
-                      ),
-                    ),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: _buildAdminCard(
-                        icon: Icons.domain_rounded,
-                        title: 'Manage\nDepartments',
-                        subtitle: 'Create & organize departments',
-                        color: Color(0xFF667EEA),
-                        onTap: () => Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => DepartmentManagementScreen(),
-                          ),
+                        SizedBox(width: 12),
+                        _buildQuickActionButton(
+                          icon: Icons.backup_rounded,
+                          label: 'System\nBackup',
+                          color: Color(0xFF8B5CF6),
+                          onTap: () {
+                            _showSnackBar('Creating system backup');
+                          },
                         ),
-                      ),
-                    ),
-                  ],
+                        SizedBox(width: 12),
+                        _buildQuickActionButton(
+                          icon: Icons.settings_suggest_rounded,
+                          label: 'Global\nSettings',
+                          color: Color(0xFF10B981),
+                          onTap: () {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (_) => AdminSettingsScreen(),
+                              ),
+                            );
+                          },
+                        ),
+                        SizedBox(width: 12),
+                        _buildQuickActionButton(
+                          icon: Icons.analytics_rounded,
+                          label: 'System\nAnalytics',
+                          color: Color(0xFFF59E0B),
+                          onTap: () {
+                            _showSnackBar('Opening system analytics dashboard');
+                          },
+                        ),
+                      ] else if (isStationAdmin) ...[
+                        _buildQuickActionButton(
+                          icon: Icons.add_circle_outline_rounded,
+                          label: 'Add\nOfficer',
+                          color: Color(0xFF10B981),
+                          onTap: () {
+                            _showSnackBar('Adding new officer to station');
+                          },
+                        ),
+                        SizedBox(width: 12),
+                        _buildQuickActionButton(
+                          icon: Icons.schedule_send_rounded,
+                          label: 'Create\nShift',
+                          color: Color(0xFFF59E0B),
+                          onTap: () {
+                            _showSnackBar('Creating new shift schedule');
+                          },
+                        ),
+                        SizedBox(width: 12),
+                        _buildQuickActionButton(
+                          icon: Icons.report_rounded,
+                          label: 'Station\nReport',
+                          color: Color(0xFF6366F1),
+                          onTap: () {
+                            _showSnackBar('Generating station report');
+                          },
+                        ),
+                        SizedBox(width: 12),
+                        _buildQuickActionButton(
+                          icon: Icons.notifications_active_rounded,
+                          label: 'Station\nAlert',
+                          color: Color(0xFFEC4899),
+                          onTap: () {
+                            _showSnackBar('Sending station-wide alert');
+                          },
+                        ),
+                      ],
+                    ],
+                  ),
                 ),
-
-                SizedBox(height: 20),
               ],
             ),
+          ),
+
+          SizedBox(height: 32),
 
           // ====================================================================
-          // STATION ADMIN TOOLS (For all admins)
+          // ACCESS NOTE
           // ====================================================================
-          Row(
-            children: [
-              Container(
-                padding: EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryBlue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  Icons.admin_panel_settings_rounded,
-                  color: AppTheme.primaryBlue,
+          Container(
+            margin: EdgeInsets.symmetric(horizontal: 20),
+            padding: EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: isRoot
+                  ? Color(0xFF6366F1).withOpacity(0.05)
+                  : Color(0xFF10B981).withOpacity(0.05),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: isRoot
+                    ? Color(0xFF6366F1).withOpacity(0.2)
+                    : Color(0xFF10B981).withOpacity(0.2),
+              ),
+            ),
+            child: Row(
+              children: [
+                Icon(
+                  isRoot ? Icons.admin_panel_settings_rounded : Icons.security_rounded,
+                  color: isRoot ? Color(0xFF6366F1) : Color(0xFF10B981),
                   size: 20,
                 ),
-              ),
-              SizedBox(width: 12),
-              Text(
-                'Station Management',
-                style: GoogleFonts.poppins(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: Color(0xFF1A1F36),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    isRoot
+                        ? 'You have full system administrator access to all stations, users, and system settings.'
+                        : 'You have access only to ${_stationName ?? "your assigned station"} management functions.',
+                    style: GoogleFonts.poppins(
+                      fontSize: 12,
+                      color: Color(0xFF6B7280),
+                    ),
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
-          SizedBox(height: 12),
 
-          GridView.count(
-            crossAxisCount: 2,
-            shrinkWrap: true,
-            physics: NeverScrollableScrollPhysics(),
-            mainAxisSpacing: 12,
-            crossAxisSpacing: 12,
-            childAspectRatio: 1.5,
-            children: [
-              _buildAdminCard(
-                icon: Icons.people_outline_rounded,
-                title: 'Manage\nUsers',
-                subtitle: 'Add & manage officers',
-                color: Color(0xFF51CF66),
-                onTap: _openUserManagement,
-              ),
-              _buildAdminCard(
-                icon: Icons.location_city_outlined,
-                title: 'Police\nStations',
-                subtitle: 'Create & configure',
-                color: Color(0xFFFFB75E),
-                onTap: _openPoliceStationManagement,
-              ),
-              _buildAdminCard(
-                icon: Icons.description_rounded,
-                title: 'Station\nIncidents',
-                subtitle: 'View all incidents',
-                color: Color(0xFF4ECDC4),
-                onTap: _openStationIncidents,
-              ),
-              _buildAdminCard(
-                icon: Icons.analytics_rounded,
-                title: 'Reports\n& Analytics',
-                subtitle: 'Statistics & insights',
-                color: Color(0xFF667EEA),
-                onTap: () {
-                  _showSnackBar('Reports feature coming soon');
-                },
-              ),
-            ],
+          SizedBox(height: 80), // Extra space for bottom navigation
+        ],
+      ),
+    );
+  }
+
+// ============================================================================
+// HELPER METHODS FOR COUNTS (Add these to your class)
+// ============================================================================
+
+// These would need to be implemented with actual data fetching
+  String _getTotalUsersCount() {
+    // Implement logic to get total users count
+    return '24'; // Placeholder
+  }
+
+  String _getTotalStationsCount() {
+    // Implement logic to get total stations count
+    return '3'; // Placeholder
+  }
+
+  String _getStationUsersCount() {
+    // Implement logic to get station-specific users count
+    return '8'; // Placeholder
+  }
+
+  String _getStationIncidentsCount() {
+    // Implement logic to get station-specific incidents count
+    return '15'; // Placeholder
+  }
+
+  String _getOnDutyCount() {
+    // Implement logic to get on-duty officers count
+    return '5'; // Placeholder
+  }
+
+// ============================================================================
+// UPDATED HELPER WIDGETS
+// ============================================================================
+
+  Widget _buildStatCard({
+    required IconData icon,
+    required String value,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.15),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.2)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(icon, size: 20, color: color),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: GoogleFonts.poppins(
+              fontSize: 20,
+              fontWeight: FontWeight.w800,
+              color: Colors.white,
+            ),
+          ),
+          SizedBox(height: 2),
+          Text(
+            label,
+            style: GoogleFonts.poppins(
+              fontSize: 11,
+              color: Colors.white.withOpacity(0.8),
+            ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildModernAdminCard({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required Color color,
+    required Gradient gradient,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: gradient,
+          borderRadius: BorderRadius.circular(16),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.3),
+              blurRadius: 15,
+              offset: Offset(0, 5),
+            ),
+          ],
+        ),
+        child: Material(
+          color: Colors.transparent,
+          borderRadius: BorderRadius.circular(16),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: onTap,
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Center(
+                      child: Icon(
+                        icon,
+                        color: Colors.white,
+                        size: 22,
+                      ),
+                    ),
+                  ),
+                  SizedBox(height: 12),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        title,
+                        style: GoogleFonts.poppins(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w800,
+                          color: Colors.white,
+                          height: 1.1,
+                        ),
+                        maxLines: 2,
+                      ),
+                      SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: GoogleFonts.poppins(
+                          fontSize: 11,
+                          color: Colors.white.withOpacity(0.9),
+                          fontWeight: FontWeight.w500,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ],
+                  ),
+                  Align(
+                    alignment: Alignment.bottomRight,
+                    child: Container(
+                      width: 28,
+                      height: 28,
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.2),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.arrow_forward_rounded,
+                        size: 16,
+                        color: Colors.white,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuickActionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: 100,
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Color(0xFFE5E7EB), width: 1),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0xFF000000).withOpacity(0.05),
+              blurRadius: 10,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Column(
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Center(
+                child: Icon(
+                  icon,
+                  color: color,
+                  size: 22,
+                ),
+              ),
+            ),
+            SizedBox(height: 12),
+            Text(
+              label,
+              style: GoogleFonts.poppins(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Color(0xFF1F2937),
+                height: 1.2,
+              ),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -2306,7 +3391,11 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 ),
                 child: Column(
                   children: [
-                    Icon(Icons.description_outlined, size: 48, color: Color(0xFF8F9BB3)),
+                    Icon(
+                      Icons.description_outlined,
+                      size: 48,
+                      color: Color(0xFF8F9BB3),
+                    ),
                     SizedBox(height: 12),
                     Text(
                       'No reports yet',
@@ -2338,7 +3427,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Widget _buildCitizenIncidentsCard() {
     return GestureDetector(
       onTap: () {
-        Navigator.push(context, MaterialPageRoute(builder: (_) => MyIncidentsScreen()));
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (_) => MyIncidentsScreen()),
+        );
       },
       child: Container(
         padding: EdgeInsets.all(16),
@@ -2430,6 +3522,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          mainAxisSize: MainAxisSize.min,
           children: [
             Container(
               padding: EdgeInsets.all(8),
@@ -2470,10 +3563,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     );
   }
 
-
   // ============================================================================
-// OFFICER INCIDENTS CARD
-// ============================================================================
+  // OFFICER INCIDENTS CARD
+  // ============================================================================
 
   Widget _buildOfficerIncidentsCard() {
     return GestureDetector(
@@ -2549,8 +3641,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   Widget _buildModernBottomNav() {
     return Container(
       decoration: BoxDecoration(
-        color: Theme.of(context).bottomNavigationBarTheme.backgroundColor
-            ?? Theme.of(context).cardColor,
+        color:
+        Theme.of(context).bottomNavigationBarTheme.backgroundColor ??
+            Theme.of(context).cardColor,
         boxShadow: [
           BoxShadow(
             color: Color(0xFF2E5BFF).withOpacity(0.08),
@@ -2618,11 +3711,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              size: 24,
-              color: Theme.of(context).iconTheme.color,
-            ),
+            Icon(icon, size: 24, color: Theme.of(context).iconTheme.color),
             SizedBox(height: 4),
             Text(
               label,
@@ -2651,10 +3740,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         gradient: LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [
-            Color(0xFFFF6B6B),
-            Color(0xFFFF5252),
-          ],
+          colors: [Color(0xFFFF6B6B), Color(0xFFFF5252)],
         ),
         shape: BoxShape.circle,
         boxShadow: [
@@ -2671,11 +3757,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           borderRadius: BorderRadius.circular(40),
           onTap: _showEmergencyDialog,
           child: Center(
-            child: Icon(
-              Icons.emergency_rounded,
-              color: Colors.white,
-              size: 32,
-            ),
+            child: Icon(Icons.emergency_rounded, color: Colors.white, size: 32),
           ),
         ),
       ),
@@ -2685,7 +3767,8 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   void _showEmergencyDialog() {
     showDialog(
       context: context,
-      builder: (context) => Dialog(
+      builder:
+          (context) => Dialog(
         backgroundColor: Colors.transparent,
         child: Container(
           padding: EdgeInsets.all(24),
@@ -2693,10 +3776,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
             gradient: LinearGradient(
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
-                colors: [
-                  Theme.of(context).cardColor,
-                  Theme.of(context).scaffoldBackgroundColor
-                ]
+              colors: [
+                Theme.of(context).cardColor,
+                Theme.of(context).scaffoldBackgroundColor,
+              ],
             ),
             borderRadius: BorderRadius.circular(24),
             boxShadow: [
@@ -2851,11 +3934,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 ],
               ),
             ),
-            Icon(
-              Icons.arrow_forward_ios_rounded,
-              size: 16,
-              color: color,
-            ),
+            Icon(Icons.arrow_forward_ios_rounded, size: 16, color: color),
           ],
         ),
       ),
@@ -2866,9 +3945,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
   // UI COMPONENTS - Nearby Stations Dialog
   // ============================================================================
 
-// ============================================================================
-// NEARBY STATIONS DIALOG (Enhanced)
-// ============================================================================
+  // ============================================================================
+  // NEARBY STATIONS DIALOG (Enhanced)
+  // ============================================================================
 
   Widget _buildNearbyStationsDialog() {
     return Dialog(
@@ -2891,12 +3970,12 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                 _buildDialogHeader(),
 
                 // Current Location Info
-                if (_currentPosition != null)
-                  _buildCurrentLocationCard(),
+                if (_currentPosition != null) _buildCurrentLocationCard(),
 
                 // Stations List
                 Flexible(
-                  child: snapshot.connectionState == ConnectionState.waiting
+                  child:
+                  snapshot.connectionState == ConnectionState.waiting
                       ? _buildDialogLoading()
                       : _nearbyStations.isEmpty
                       ? _buildDialogEmpty()
@@ -2913,9 +3992,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     );
   }
 
-// ============================================================================
-// DIALOG COMPONENTS
-// ============================================================================
+  // ============================================================================
+  // DIALOG COMPONENTS
+  // ============================================================================
 
   Widget _buildDialogHeader() {
     return Container(
@@ -3111,7 +4190,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                       ),
                     ),
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 6,
+                      ),
                       decoration: BoxDecoration(
                         color: AppTheme.successGreen.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(8),
@@ -3183,9 +4265,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       padding: EdgeInsets.all(20),
       decoration: BoxDecoration(
         color: Colors.white,
-        border: Border(
-          top: BorderSide(color: Color(0xFFE4E9F2)),
-        ),
+        border: Border(top: BorderSide(color: Color(0xFFE4E9F2))),
       ),
       child: Row(
         children: [
@@ -3249,10 +4329,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           SizedBox(height: 8),
           Text(
             'Please wait',
-            style: GoogleFonts.poppins(
-              fontSize: 12,
-              color: Color(0xFF8F9BB3),
-            ),
+            style: GoogleFonts.poppins(fontSize: 12, color: Color(0xFF8F9BB3)),
           ),
         ],
       ),
@@ -3290,10 +4367,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           SizedBox(height: 8),
           Text(
             'No police stations within ${_maxDistance.toInt()}km radius',
-            style: GoogleFonts.poppins(
-              fontSize: 12,
-              color: Color(0xFF8F9BB3),
-            ),
+            style: GoogleFonts.poppins(fontSize: 12, color: Color(0xFF8F9BB3)),
             textAlign: TextAlign.center,
           ),
           SizedBox(height: 20),
@@ -3326,10 +4400,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     );
   }
 
-// ============================================================================
-// UI COMPONENTS - Profile Drawer (COMPLETE WITH DELETE ACCOUNT)
-// ============================================================================
-
+  // ============================================================================
+  // UI COMPONENTS - Profile Drawer (COMPLETE WITH DELETE ACCOUNT)
+  // ============================================================================
   Widget _buildProfileDrawer() {
     return Container(
       color: Colors.white,
@@ -3389,7 +4462,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                   // Role/Rank Display
                   if (_userRole == "POLICE_OFFICER" && _rank != null)
                     Container(
-                      padding: EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                      padding: EdgeInsets.symmetric(
+                        horizontal: 10,
+                        vertical: 5,
+                      ),
                       decoration: BoxDecoration(
                         color: Colors.white.withOpacity(0.2),
                         borderRadius: BorderRadius.circular(6),
@@ -3499,14 +4575,18 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                     // ==================================================================
                     // ADMIN TOOLS (Only for Admins)
                     // ==================================================================
-                    if (_userRole == "STATION_ADMIN" || _userRole == "ROOT") ...[
+                    if (_userRole == "STATION_ADMIN" ||
+                        _userRole == "ROOT") ...[
                       Container(
                         width: double.infinity,
                         padding: EdgeInsets.all(14),
                         decoration: BoxDecoration(
                           color: Color(0xFFF8F9FC),
                           borderRadius: BorderRadius.circular(10),
-                          border: Border.all(color: Color(0xFFE4E9F2), width: 1),
+                          border: Border.all(
+                            color: Color(0xFFE4E9F2),
+                            width: 1,
+                          ),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -3546,123 +4626,128 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         ),
                       ),
                       SizedBox(height: 14),
-                    ],// 🎯 ADD THIS TO YOUR EXISTING DASHBOARD CLASS
-// Add this method and update the drawer building
+                    ],
 
-// ============================================================================
-// UPDATE THE _buildProfileDrawer() METHOD - ADD THIS AFTER ADMIN TOOLS SECTION
-// ============================================================================
-
-// IN THE _buildProfileDrawer() METHOD, AFTER THE ADMIN TOOLS SECTION, ADD:
-
-            if (_userRole == "ROOT") ...[
-          SizedBox(height: 14),
-
-        // ====================================================================
-        // ROOT ONLY - ADMIN SETTINGS
-        // ====================================================================
-        Container(
-          width: double.infinity,
-          padding: EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [Color(0xFF2E5BFF).withOpacity(0.1), Color(0xFF667EEA).withOpacity(0.1)],
-            ),
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(color: Color(0xFF2E5BFF).withOpacity(0.3), width: 1.5),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    padding: EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: Color(0xFF2E5BFF),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Icon(
-                      Icons.admin_panel_settings_rounded,
-                      color: Colors.white,
-                      size: 16,
-                    ),
-                  ),
-                  SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'ROOT ADMINISTRATOR',
-                          style: GoogleFonts.poppins(
-                            fontSize: 11,
-                            fontWeight: FontWeight.w700,
-                            color: Color(0xFF2E5BFF),
+                    // ====================================================================
+                    // ROOT ONLY - ADMIN SETTINGS
+                    // ====================================================================
+                    if (_userRole == "ROOT") ...[
+                      Container(
+                        width: double.infinity,
+                        padding: EdgeInsets.all(14),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [
+                              Color(0xFF2E5BFF).withOpacity(0.1),
+                              Color(0xFF667EEA).withOpacity(0.1),
+                            ],
+                          ),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Color(0xFF2E5BFF).withOpacity(0.3),
+                            width: 1.5,
                           ),
                         ),
-                        SizedBox(height: 2),
-                        Text(
-                          'Full system access',
-                          style: GoogleFonts.poppins(
-                            fontSize: 9,
-                            color: Color(0xFF2E5BFF).withOpacity(0.7),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-              SizedBox(height: 12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: Color(0xFF2E5BFF),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Icon(
+                                    Icons.admin_panel_settings_rounded,
+                                    color: Colors.white,
+                                    size: 16,
+                                  ),
+                                ),
+                                SizedBox(width: 10),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                    CrossAxisAlignment.start,
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Text(
+                                        'ROOT ADMINISTRATOR',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w700,
+                                          color: Color(0xFF2E5BFF),
+                                        ),
+                                      ),
+                                      SizedBox(height: 2),
+                                      Text(
+                                        'Full system access',
+                                        style: GoogleFonts.poppins(
+                                          fontSize: 9,
+                                          color: Color(
+                                            0xFF2E5BFF,
+                                          ).withOpacity(0.7),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                            SizedBox(height: 12),
 
-              // Root admin action buttons
-              _buildProfileActionTile(
-                Icons.domain_rounded,
-                "Manage Agencies",
-                    () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => AgencyManagementScreen(),
-                    ),
-                  );
-                },
-              ),
-              SizedBox(height: 8),
-              _buildProfileActionTile(
-                Icons.business_rounded,
-                "Manage Departments",
-                    () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => DepartmentManagementScreen(),
-                    ),
-                  );
-                },
-              ),
-              SizedBox(height: 8),
-              _buildProfileActionTile(
-                Icons.settings_rounded,
-                "Admin Settings",
-                    () {
-                  Navigator.pop(context);
-                  Navigator.push(
-                    context,
-                    MaterialPageRoute(
-                      builder: (context) => AdminSettingsScreen(),
-                    ),
-                  );
-                },
-              ),
-            ],
-          ),
-        ),
-        ],
+                            // Root admin action buttons
+                            _buildProfileActionTile(
+                              Icons.domain_rounded,
+                              "Manage Agencies",
+                                  () {
+                                Navigator.pop(context);
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder:
+                                        (context) => AgencyManagementScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                            SizedBox(height: 8),
+                            _buildProfileActionTile(
+                              Icons.business_rounded,
+                              "Manage Departments",
+                                  () {
+                                Navigator.pop(context);
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder:
+                                        (context) =>
+                                        DepartmentManagementScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                            SizedBox(height: 8),
+                            _buildProfileActionTile(
+                              Icons.settings_rounded,
+                              "Admin Settings",
+                                  () {
+                                Navigator.pop(context);
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (context) => AdminSettingsScreen(),
+                                  ),
+                                );
+                              },
+                            ),
+                          ],
+                        ),
+                      ),
+                      SizedBox(height: 14),
+                    ],
 
                     // ==================================================================
                     // LOGOUT BUTTON
@@ -3682,8 +4767,13 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.center,
                           children: [
-                            Icon(Icons.logout_rounded, size: 16, color: Colors.white),
+                            Icon(
+                              Icons.logout_rounded,
+                              size: 16,
+                              color: Colors.white,
+                            ),
                             SizedBox(width: 8),
                             Text(
                               'Logout',
@@ -3709,7 +4799,10 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                         child: OutlinedButton(
                           onPressed: _showDeleteAccountDialog,
                           style: OutlinedButton.styleFrom(
-                            side: BorderSide(color: AppTheme.errorRed, width: 1.5),
+                            side: BorderSide(
+                              color: AppTheme.errorRed,
+                              width: 1.5,
+                            ),
                             shape: RoundedRectangleBorder(
                               borderRadius: BorderRadius.circular(10),
                             ),
@@ -3717,6 +4810,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.center,
                             mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               Icon(
                                 Icons.delete_forever_rounded,
@@ -3760,10 +4854,9 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       ),
     );
   }
-
-// ============================================================================
-// PROFILE DRAWER - HELPER WIDGETS
-// ============================================================================
+  // ============================================================================
+  // PROFILE DRAWER - HELPER WIDGETS
+  // ============================================================================
 
   Widget _buildProfileInfoRow(
       IconData icon,
@@ -3783,11 +4876,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
               color: Color(0xFF2E5BFF).withOpacity(0.1),
               borderRadius: BorderRadius.circular(6),
             ),
-            child: Icon(
-              icon,
-              size: 14,
-              color: Color(0xFF2E5BFF),
-            ),
+            child: Icon(icon, size: 14, color: Color(0xFF2E5BFF)),
           ),
           SizedBox(width: 12),
 
@@ -3795,6 +4884,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
                   label,
@@ -3836,11 +4926,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
         padding: EdgeInsets.symmetric(vertical: 12, horizontal: 8),
         child: Row(
           children: [
-            Icon(
-              icon,
-              size: 20,
-              color: Color(0xFF8F9BB3),
-            ),
+            Icon(icon, size: 20, color: Color(0xFF8F9BB3)),
             SizedBox(width: 12),
             Expanded(
               child: Text(
@@ -3868,11 +4954,7 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
       padding: EdgeInsets.only(bottom: 8),
       child: Row(
         children: [
-          Icon(
-            Icons.circle,
-            size: 6,
-            color: Color(0xFF856404),
-          ),
+          Icon(Icons.circle, size: 6, color: Color(0xFF856404)),
           SizedBox(width: 8),
           Expanded(
             child: Text(
@@ -3944,25 +5026,40 @@ class _DashboardScreenState extends State<DashboardScreen> with TickerProviderSt
     if (rankAbbreviation == null) return "Officer";
 
     switch (rankAbbreviation.toUpperCase()) {
-      case "PC": return "Police Constable";
-      case "CPC": return "Corporal Constable";
-      case "SPC": return "Senior Constable";
+      case "PC":
+        return "Police Constable";
+      case "CPC":
+        return "Corporal Constable";
+      case "SPC":
+        return "Senior Constable";
       case "SGT":
-      case "PS": return "Sergeant";
+      case "PS":
+        return "Sergeant";
       case "SSGT":
-      case "SPS": return "Senior Sergeant";
+      case "SPS":
+        return "Senior Sergeant";
       case "IP":
-      case "INS": return "Inspector";
+      case "INS":
+        return "Inspector";
       case "AIP":
-      case "AINS": return "Asst. Inspector";
-      case "ASP": return "Asst. Superintendent";
-      case "DSP": return "Deputy Superintendent";
-      case "SP": return "Superintendent";
-      case "ACP": return "Asst. Commissioner";
-      case "DCP": return "Deputy Commissioner";
-      case "CP": return "Commissioner";
-      case "IGP": return "Inspector General";
-      default: return rankAbbreviation;
+      case "AINS":
+        return "Asst. Inspector";
+      case "ASP":
+        return "Asst. Superintendent";
+      case "DSP":
+        return "Deputy Superintendent";
+      case "SP":
+        return "Superintendent";
+      case "ACP":
+        return "Asst. Commissioner";
+      case "DCP":
+        return "Deputy Commissioner";
+      case "CP":
+        return "Commissioner";
+      case "IGP":
+        return "Inspector General";
+      default:
+        return rankAbbreviation;
     }
   }
 
