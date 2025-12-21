@@ -3637,7 +3637,6 @@ class _DashboardScreenState extends State<DashboardScreen>
   // ============================================================================
   // UI COMPONENTS - Modern Bottom Navigation
   // ============================================================================
-
   Widget _buildModernBottomNav() {
     return Container(
       decoration: BoxDecoration(
@@ -3674,7 +3673,13 @@ class _DashboardScreenState extends State<DashboardScreen>
                   );
                 },
               ),
-              SizedBox(width: 64),
+
+              // Emergency Button in floating position
+              Transform.translate(
+                offset: Offset(0, -30),
+                child: _buildEmergencyButton(),
+              ),
+
               _buildBottomNavIcon(
                 icon: Icons.forum_rounded,
                 label: 'Chats',
@@ -3685,10 +3690,15 @@ class _DashboardScreenState extends State<DashboardScreen>
                   );
                 },
               ),
+
+              // MINIAPPS BUTTON - MWISHO KABISA
               _buildBottomNavIcon(
-                icon: Icons.emergency_outlined,
-                label: 'Report',
-                onTap: _navigateToReportIncident,
+                icon: Icons.apps_rounded,
+                label: 'Miniapps',
+                onTap: () {
+                  // Placeholder function - no screen navigation
+                  _showMiniappsComingSoon();
+                },
               ),
             ],
           ),
@@ -3728,10 +3738,7 @@ class _DashboardScreenState extends State<DashboardScreen>
     );
   }
 
-  // ============================================================================
-  // UI COMPONENTS - Emergency Button
-  // ============================================================================
-
+  // Emergency Button (from your original code with floating position)
   Widget _buildEmergencyButton() {
     return Container(
       width: 65,
@@ -3767,8 +3774,7 @@ class _DashboardScreenState extends State<DashboardScreen>
   void _showEmergencyDialog() {
     showDialog(
       context: context,
-      builder:
-          (context) => Dialog(
+      builder: (context) => Dialog(
         backgroundColor: Colors.transparent,
         child: Container(
           padding: EdgeInsets.all(24),
@@ -3937,6 +3943,26 @@ class _DashboardScreenState extends State<DashboardScreen>
             Icon(Icons.arrow_forward_ios_rounded, size: 16, color: color),
           ],
         ),
+      ),
+    );
+  }
+
+  void _showMiniappsComingSoon() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.apps_rounded, color: Colors.white, size: 20),
+            SizedBox(width: 12),
+            Text('Miniapps feature coming soon!'),
+          ],
+        ),
+        backgroundColor: Color(0xFF2E5BFF),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        duration: Duration(seconds: 2),
       ),
     );
   }

@@ -1,4 +1,4 @@
-// lib/screens/otp_screen.dart
+// lib/screens/auth/otp_screen.dart
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -27,7 +27,7 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
   int _resendCountdown = 0;
   int _resendAttempts = 0;
   int _maxResendAttempts = 3;
-  int _cooldownPeriod = 300; // 5 minutes in seconds
+  int _cooldownPeriod = 300;
   int _cooldownCountdown = 0;
   bool _isInCooldown = false;
   Timer? _resendTimer;
@@ -35,9 +35,13 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
 
   late AnimationController _animationController;
   late AnimationController _shakeController;
+  late AnimationController _pulseController;
+  late AnimationController _successController;
   late Animation<double> _fadeAnimation;
   late Animation<double> _slideAnimation;
   late Animation<double> _shakeAnimation;
+  late Animation<double> _pulseAnimation;
+  late Animation<double> _successScale;
 
   @override
   void initState() {
@@ -54,7 +58,17 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
     );
 
     _shakeController = AnimationController(
-      duration: Duration(milliseconds: 500),
+      duration: Duration(milliseconds: 400),
+      vsync: this,
+    );
+
+    _pulseController = AnimationController(
+      duration: Duration(milliseconds: 1500),
+      vsync: this,
+    )..repeat(reverse: true);
+
+    _successController = AnimationController(
+      duration: Duration(milliseconds: 600),
       vsync: this,
     );
 
@@ -76,10 +90,26 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
 
     _shakeAnimation = Tween<double>(
       begin: 0.0,
-      end: 10.0,
+      end: 8.0,
     ).animate(CurvedAnimation(
       parent: _shakeController,
-      curve: Curves.elasticIn,
+      curve: Curves.elasticOut,
+    ));
+
+    _pulseAnimation = Tween<double>(
+      begin: 1.0,
+      end: 1.05,
+    ).animate(CurvedAnimation(
+      parent: _pulseController,
+      curve: Curves.easeInOut,
+    ));
+
+    _successScale = Tween<double>(
+      begin: 0.0,
+      end: 1.0,
+    ).animate(CurvedAnimation(
+      parent: _successController,
+      curve: Curves.elasticOut,
     ));
 
     _animationController.forward();
@@ -116,7 +146,7 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
   }
 
   void _startResendCountdown() {
-    setState(() => _resendCountdown = 120); // 2 minutes
+    setState(() => _resendCountdown = 120);
     _resendTimer?.cancel();
     _resendTimer = Timer.periodic(Duration(seconds: 1), (timer) {
       if (!mounted) {
@@ -157,6 +187,8 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
     _cooldownTimer?.cancel();
     _animationController.dispose();
     _shakeController.dispose();
+    _pulseController.dispose();
+    _successController.dispose();
     _otpControllers.forEach((controller) => controller.dispose());
     _focusNodes.forEach((node) => node.dispose());
     super.dispose();
@@ -179,8 +211,15 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
   }
 
   void _clearOtpFields() {
-    _otpControllers.forEach((controller) => controller.clear());
-    _focusNodes[0].requestFocus();
+    for (int i = 0; i < _otpControllers.length; i++) {
+      _otpControllers[i].clear();
+    }
+    FocusScope.of(context).unfocus();
+    Future.delayed(Duration(milliseconds: 100), () {
+      if (mounted) {
+        _focusNodes[0].requestFocus();
+      }
+    });
   }
 
   void _shakeOtpFields() {
@@ -191,90 +230,198 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
   Future<void> _verifyOtp() async {
     final otp = _otpCode.trim();
     if (otp.length != 6) {
-      _showErrorSnackBar("Please enter complete OTP code");
+      _showErrorSnackBar("Please enter complete 6-digit OTP");
       _shakeOtpFields();
       return;
     }
+
     setState(() => _isLoading = true);
+
     try {
+      print("🔐 Verifying OTP: $otp for ${widget.phoneNumber}");
+
       final response = await gql.sendMutation(verifyOtpMutation, {
         "phone": widget.phoneNumber,
         "code": otp,
       });
-      print("📡 Verify OTP response: $response");
+
+      print("📋 Verify response: $response");
+
+      if (!mounted) return;
+
       final result = response['data']?['verifyOtp'];
       final token = result?['data'];
       final message = result?['message'];
+
       if (token != null && token.toString().startsWith("eyJ")) {
+        _successController.forward();
+
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString("jwt_token", token.toString());
         await prefs.remove('resend_attempts');
         await prefs.remove('last_resend_time');
+
         _showSuccessSnackBar(message ?? "OTP verified successfully");
-        await Future.delayed(Duration(milliseconds: 1000));
-        Navigator.pushReplacementNamed(context, '/dashboard'); // Changed to pushNamed
+
+        await Future.delayed(Duration(milliseconds: 1500));
+
+        if (mounted) {
+          Navigator.pushReplacement(
+            context,
+            PageRouteBuilder(
+              pageBuilder: (_, __, ___) => DashboardScreen(),
+              transitionsBuilder: (_, animation, __, child) {
+                return FadeTransition(
+                  opacity: animation,
+                  child: child,
+                );
+              },
+              transitionDuration: Duration(milliseconds: 500),
+            ),
+          );
+        }
       } else {
-        final error = response['errors']?[0]?['message'] ?? message ?? "Failed to verify OTP";
+        final error = response['errors']?[0]?['message'] ??
+            message ??
+            "Failed to verify OTP";
         _showErrorSnackBar(error);
-        _clearOtpFields();
         _shakeOtpFields();
+        _clearOtpFields();
       }
     } catch (e) {
+      if (!mounted) return;
+
+      print("❌ Verify error: $e");
+
       final errorMessage = e.toString().contains("Network")
           ? "Network error, please try again"
           : "Error: $e";
       _showErrorSnackBar(errorMessage);
       _shakeOtpFields();
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   Future<void> _resendOtp() async {
+    // Check all blocking conditions
     if (_resendCountdown > 0 || _isResending || _isInCooldown) {
+      if (_resendCountdown > 0) {
+        _showInfoSnackBar("Please wait before requesting new OTP");
+      }
       return;
     }
 
+    // Check max attempts
     if (_resendAttempts >= _maxResendAttempts) {
       setState(() {
         _isInCooldown = true;
         _cooldownCountdown = _cooldownPeriod;
       });
       _startCooldownCountdown();
-      _showErrorSnackBar("Maximum resend attempts reached. Please wait.");
+      _showErrorSnackBar(
+          "Maximum resend attempts reached. Please wait ${_formatTime(_cooldownCountdown)} before trying again."
+      );
       await _saveResendState();
       return;
     }
 
+    // Start resending
     setState(() => _isResending = true);
 
     try {
+      print("🔄 Resending OTP to: ${widget.phoneNumber}");
+
       final response = await gql.sendMutation(requestOtpMutation, {
         "phone": widget.phoneNumber,
       });
 
-      print("📡 Resend OTP response: $response");
+      print("📡 Resend response: $response");
 
-      final result = response['data']?['requestOtp'];
-      final success = result?['status'] == 'Success';
-      final message = result?['message'];
+      if (!mounted) return;
+
+      // Check for GraphQL errors first
+      if (response['errors'] != null && response['errors'].isNotEmpty) {
+        final error = response['errors'][0]['message'] ?? "Failed to resend OTP";
+        _showErrorSnackBar(error);
+        return;
+      }
+
+      // Check data
+      final data = response['data'];
+      if (data == null) {
+        _showErrorSnackBar("No response from server");
+        return;
+      }
+
+      final result = data['requestOtp'];
+      if (result == null) {
+        _showErrorSnackBar("Invalid response format");
+        return;
+      }
+
+      // Check success conditions (adapt to your API response)
+      final success = result['success'] ??
+          result['status'] == 'success' ||
+              result['status'] == 'Success' ||
+              result['message']?.toLowerCase().contains('sent') == true;
+      final message = result['message'] ?? "OTP sent successfully";
 
       if (success) {
+        // Update state
         setState(() {
           _resendAttempts++;
-          _resendCountdown = 120;
+          _resendCountdown = 120; // 2 minutes
         });
+
+        // Save state and start countdown
         await _saveResendState();
         _startResendCountdown();
-        _showSuccessSnackBar(message ?? "OTP code resent successfully");
+
+        // Show success and clear fields
+        _showSuccessSnackBar(message);
         _clearOtpFields();
+
+        // Optional: Play success animation
+        _successController.reset();
+        _successController.forward();
+
       } else {
-        _showErrorSnackBar(message ?? "Failed to resend OTP");
+        // Handle failure
+        final errorMsg = message.contains("already")
+            ? "OTP already sent. Please check your messages."
+            : message.contains("wait")
+            ? "Please wait before requesting new code"
+            : message;
+
+        _showErrorSnackBar(errorMsg);
       }
     } catch (e) {
-      _showErrorSnackBar("Failed to resend OTP. Please try again.");
+      if (!mounted) return;
+
+      print("❌ Resend error: $e");
+
+      // More specific error messages
+      String errorMessage;
+      if (e.toString().contains("SocketException") ||
+          e.toString().contains("Connection failed")) {
+        errorMessage = "No internet connection. Please check your network.";
+      } else if (e.toString().contains("Timeout")) {
+        errorMessage = "Request timeout. Please try again.";
+      } else if (e.toString().contains("FormatException")) {
+        errorMessage = "Invalid response from server.";
+      } else {
+        errorMessage = "Failed to resend OTP. Please try again.";
+      }
+
+      _showErrorSnackBar(errorMessage);
+
     } finally {
-      setState(() => _isResending = false);
+      if (mounted) {
+        setState(() => _isResending = false);
+      }
     }
   }
 
@@ -289,21 +436,40 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
       SnackBar(
         content: Row(
           children: [
-            Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
-            SizedBox(width: AppTheme.spaceS),
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+              ),
+              child: Icon(
+                Icons.check,
+                color: AppTheme.successGreen,
+                size: 16,
+              ),
+            ),
+            SizedBox(width: 12),
             Expanded(
               child: Text(
                 message,
-                style: AppTheme.bodyMedium.copyWith(color: Colors.white),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
               ),
             ),
           ],
         ),
         backgroundColor: AppTheme.successGreen,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: AppTheme.buttonRadius),
-        margin: EdgeInsets.all(AppTheme.spaceM),
-        duration: Duration(seconds: 2),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: EdgeInsets.all(16),
+        duration: Duration(seconds: 3),
+        elevation: 8,
       ),
     );
   }
@@ -313,22 +479,117 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
       SnackBar(
         content: Row(
           children: [
-            Icon(Icons.error_outline, color: Colors.white, size: 20),
-            SizedBox(width: AppTheme.spaceS),
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+              ),
+              child: Icon(
+                Icons.close,
+                color: AppTheme.errorRed,
+                size: 16,
+              ),
+            ),
+            SizedBox(width: 12),
             Expanded(
               child: Text(
                 message,
-                style: AppTheme.bodyMedium.copyWith(color: Colors.white),
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
               ),
             ),
           ],
         ),
         backgroundColor: AppTheme.errorRed,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: AppTheme.buttonRadius),
-        margin: EdgeInsets.all(AppTheme.spaceM),
-        duration: Duration(seconds: 3),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: EdgeInsets.all(16),
+        duration: Duration(seconds: 4),
+        elevation: 8,
       ),
+    );
+  }
+
+  void _showInfoSnackBar(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Container(
+              width: 28,
+              height: 28,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: Colors.white,
+              ),
+              child: Icon(
+                Icons.info,
+                color: AppTheme.infoBlue,
+                size: 16,
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                  fontSize: 14,
+                ),
+              ),
+            ),
+          ],
+        ),
+        backgroundColor: AppTheme.infoBlue,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(12),
+        ),
+        margin: EdgeInsets.all(16),
+        duration: Duration(seconds: 2),
+        elevation: 8,
+      ),
+    );
+  }
+
+  Widget _buildBackButton() {
+    return AnimatedBuilder(
+      animation: _fadeAnimation,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _fadeAnimation.value,
+          child: GestureDetector(
+            onTap: () => Navigator.pop(context),
+            child: Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: AppTheme.primaryBlue.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: AppTheme.primaryBlue.withOpacity(0.2),
+                  width: 1.5,
+                ),
+              ),
+              child: Icon(
+                Icons.arrow_back_ios_new_rounded,
+                color: AppTheme.primaryBlue,
+                size: 20,
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -341,48 +602,96 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
           child: Transform.translate(
             offset: Offset(0, _slideAnimation.value),
             child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: [
+                // Icon Container with gradient
                 Container(
-                  padding: EdgeInsets.all(AppTheme.spaceM),
+                  width: 100,
+                  height: 100,
                   decoration: BoxDecoration(
-                    gradient: AppTheme.primaryGradient,
-                    borderRadius: AppTheme.mediumRadius,
-                    boxShadow: [AppTheme.cardShadow],
+                    gradient: LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppTheme.primaryBlue.withOpacity(0.15),
+                        AppTheme.primaryBlue.withOpacity(0.08),
+                      ],
+                    ),
+                    borderRadius: BorderRadius.circular(24),
+                    border: Border.all(
+                      color: AppTheme.primaryBlue.withOpacity(0.2),
+                      width: 1.5,
+                    ),
                   ),
-                  child: Icon(
-                    Icons.security,
-                    color: Colors.white,
-                    size: 32,
+                  child: Center(
+                    child: Container(
+                      width: 60,
+                      height: 60,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [
+                            AppTheme.primaryBlue,
+                            AppTheme.primaryBlue.withOpacity(0.8),
+                          ],
+                        ),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppTheme.primaryBlue.withOpacity(0.3),
+                            blurRadius: 16,
+                            offset: Offset(0, 6),
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.lock_outline_rounded,
+                        color: Colors.white,
+                        size: 32,
+                      ),
+                    ),
                   ),
                 ),
-                SizedBox(height: AppTheme.spaceL),
+                SizedBox(height: 32),
+
+                // Title
                 Text(
-                  "Verify OTP",
-                  style: AppTheme.headlineMedium.copyWith(
-                    fontWeight: FontWeight.bold,
+                  "Verify Your Account",
+                  style: TextStyle(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w800,
                     color: AppTheme.primaryBlue,
+                    letterSpacing: -0.5,
                   ),
                 ),
-                SizedBox(height: AppTheme.spaceS),
-                RichText(
-                  text: TextSpan(
-                    style: AppTheme.bodyLarge,
-                    children: [
-                      TextSpan(
-                        text: "Enter the 6-digit code sent to ",
-                        style: AppTheme.bodyLarge.copyWith(
-                          color: AppTheme.textSecondary,
-                        ),
+                SizedBox(height: 12),
+
+                // Description
+                Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: RichText(
+                    textAlign: TextAlign.center,
+                    text: TextSpan(
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: Color(0xFF6B7280),
+                        height: 1.6,
                       ),
-                      TextSpan(
-                        text: widget.phoneNumber,
-                        style: AppTheme.bodyLarge.copyWith(
-                          color: AppTheme.primaryBlue,
-                          fontWeight: FontWeight.w600,
+                      children: [
+                        TextSpan(
+                          text: "We've sent a 6-digit code to\n",
                         ),
-                      ),
-                    ],
+                        TextSpan(
+                          text: widget.phoneNumber,
+                          style: TextStyle(
+                            color: AppTheme.primaryBlue,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ],
@@ -399,88 +708,118 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
       builder: (context, child) {
         return Transform.translate(
           offset: Offset(
-              (_shakeAnimation.value *
-                  ((_shakeController.value * 4).floor() % 2 == 0 ? 1 : -1)),
-              0),
-          child: Container(
-            padding: EdgeInsets.all(AppTheme.spaceL),
-            decoration: AppTheme.primaryCardDecoration,
-            child: Column(
-              children: [
-                Text(
-                  "Enter Verification Code",
-                  style: AppTheme.titleMedium.copyWith(
-                    color: AppTheme.primaryBlue,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
-                SizedBox(height: AppTheme.spaceL),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                  children: List.generate(6, (index) {
-                    return Container(
-                      width: 45,
-                      height: 55,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: AppTheme.smallRadius,
-                        border: Border.all(
-                          color: _otpControllers[index].text.isNotEmpty
-                              ? AppTheme.primaryBlue
-                              : AppTheme.borderColor,
-                          width: _otpControllers[index].text.isNotEmpty ? 2 : 1,
-                        ),
-                        boxShadow: [AppTheme.lightShadow],
-                      ),
-                      child: TextField(
-                        controller: _otpControllers[index],
-                        focusNode: _focusNodes[index],
-                        textAlign: TextAlign.center,
-                        style: AppTheme.titleLarge.copyWith(
-                          fontWeight: FontWeight.bold,
-                          color: AppTheme.primaryBlue,
-                        ),
-                        keyboardType: TextInputType.number,
-                        maxLength: 1,
-                        decoration: InputDecoration(
-                          counterText: "",
-                          border: InputBorder.none,
-                          contentPadding: EdgeInsets.zero,
-                        ),
-                        inputFormatters: [
-                          FilteringTextInputFormatter.digitsOnly,
-                        ],
-                        onChanged: (value) => _onOtpChanged(value, index),
-                      ),
-                    );
-                  }),
-                ),
-                SizedBox(height: AppTheme.spaceL),
-                if (_isLoading)
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: CircularProgressIndicator(
-                          valueColor: AlwaysStoppedAnimation<Color>(
-                            AppTheme.primaryBlue,
+            (_shakeAnimation.value *
+                ((_shakeController.value * 4).floor() % 2 == 0 ? 1 : -1)),
+            0,
+          ),
+          child: Column(
+            children: [
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: List.generate(6, (index) {
+                  return AnimatedBuilder(
+                    animation: _pulseController,
+                    builder: (context, child) {
+                      final isFocused = _focusNodes[index].hasFocus;
+                      final hasValue = _otpControllers[index].text.isNotEmpty;
+
+                      return Transform.scale(
+                        scale: isFocused ? _pulseAnimation.value : 1.0,
+                        child: Container(
+                          width: 52,
+                          height: 64,
+                          decoration: BoxDecoration(
+                            borderRadius: BorderRadius.circular(16),
+                            color: Colors.white,
+                            boxShadow: [
+                              BoxShadow(
+                                color: (isFocused || hasValue)
+                                    ? AppTheme.primaryBlue.withOpacity(0.15)
+                                    : Colors.black.withOpacity(0.05),
+                                blurRadius: isFocused ? 16 : 8,
+                                offset: Offset(0, isFocused ? 8 : 2),
+                                spreadRadius: isFocused ? 2 : 0,
+                              ),
+                            ],
+                            border: Border.all(
+                              color: hasValue
+                                  ? AppTheme.primaryBlue
+                                  : isFocused
+                                  ? AppTheme.primaryBlue.withOpacity(0.6)
+                                  : Color(0xFFE5E7EB),
+                              width: hasValue ? 2.5 : isFocused ? 2 : 1,
+                            ),
                           ),
-                          strokeWidth: 2,
+                          child: Center(
+                            child: TextField(
+                              controller: _otpControllers[index],
+                              focusNode: _focusNodes[index],
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800,
+                                color: AppTheme.primaryBlue,
+                                letterSpacing: 2,
+                              ),
+                              keyboardType: TextInputType.number,
+                              maxLength: 1,
+                              decoration: InputDecoration(
+                                counterText: "",
+                                border: InputBorder.none,
+                                contentPadding: EdgeInsets.zero,
+                              ),
+                              inputFormatters: [
+                                FilteringTextInputFormatter.digitsOnly,
+                              ],
+                              onChanged: (value) => _onOtpChanged(value, index),
+                            ),
+                          ),
+                        ),
+                      );
+                    },
+                  );
+                }),
+              ),
+              SizedBox(height: 32),
+
+              // Loading State
+              if (_isLoading)
+                Column(
+                  children: [
+                    Container(
+                      width: 56,
+                      height: 56,
+                      padding: EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: AppTheme.primaryBlue.withOpacity(0.1),
+                        shape: BoxShape.circle,
+                        boxShadow: [
+                          BoxShadow(
+                            color: AppTheme.primaryBlue.withOpacity(0.15),
+                            blurRadius: 12,
+                            offset: Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      child: CircularProgressIndicator(
+                        strokeWidth: 3,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          AppTheme.primaryBlue,
                         ),
                       ),
-                      SizedBox(width: AppTheme.spaceS),
-                      Text(
-                        "Verifying...",
-                        style: AppTheme.bodyMedium.copyWith(
-                          color: AppTheme.primaryBlue,
-                        ),
+                    ),
+                    SizedBox(height: 16),
+                    Text(
+                      "Verifying OTP...",
+                      style: TextStyle(
+                        color: AppTheme.primaryBlue,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
                       ),
-                    ],
-                  ),
-              ],
-            ),
+                    ),
+                  ],
+                ),
+            ],
           ),
         );
       },
@@ -488,191 +827,361 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
   }
 
   Widget _buildVerifyButton() {
-    return Container(
-      width: double.infinity,
-      height: 56,
-      decoration: _isLoading || _otpCode.length != 6
-          ? BoxDecoration(
-        color: AppTheme.borderColor,
-        borderRadius: AppTheme.buttonRadius,
-      )
-          : AppTheme.primaryButtonDecoration,
-      child: ElevatedButton(
-        onPressed: (_isLoading || _otpCode.length != 6) ? null : _verifyOtp,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: Colors.transparent,
-          elevation: 0,
-          shadowColor: Colors.transparent,
-          shape: RoundedRectangleBorder(
-            borderRadius: AppTheme.buttonRadius,
+    final isComplete = _otpCode.length == 6;
+
+    return AnimatedBuilder(
+      animation: _pulseController,
+      builder: (context, child) {
+        return Transform.scale(
+          scale: isComplete && !_isLoading ? _pulseAnimation.value : 1.0,
+          child: Container(
+            width: double.infinity,
+            height: 56,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: isComplete && !_isLoading
+                  ? [
+                BoxShadow(
+                  color: AppTheme.primaryBlue.withOpacity(0.35),
+                  blurRadius: 20,
+                  offset: Offset(0, 8),
+                  spreadRadius: 2,
+                ),
+              ]
+                  : [],
+            ),
+            child: Material(
+              color: Colors.transparent,
+              child: InkWell(
+                onTap: (_isLoading || !isComplete) ? null : _verifyOtp,
+                borderRadius: BorderRadius.circular(14),
+                child: Container(
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(14),
+                    gradient: isComplete && !_isLoading
+                        ? LinearGradient(
+                      begin: Alignment.topLeft,
+                      end: Alignment.bottomRight,
+                      colors: [
+                        AppTheme.primaryBlue,
+                        AppTheme.primaryBlue.withOpacity(0.85),
+                      ],
+                    )
+                        : LinearGradient(
+                      colors: [
+                        Color(0xFFE5E7EB),
+                        Color(0xFFD1D5DB),
+                      ],
+                    ),
+                  ),
+                  child: Center(
+                    child: _isLoading
+                        ? SizedBox(
+                      width: 24,
+                      height: 24,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2.5,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          Colors.white,
+                        ),
+                      ),
+                    )
+                        : Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(
+                          Icons.verified_user_rounded,
+                          color: isComplete
+                              ? Colors.white
+                              : Color(0xFF9CA3AF),
+                          size: 22,
+                        ),
+                        SizedBox(width: 10),
+                        Text(
+                          "Verify OTP",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: isComplete
+                                ? Colors.white
+                                : Color(0xFF9CA3AF),
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
           ),
-        ),
-        child: _isLoading
-            ? SizedBox(
-          width: 24,
-          height: 24,
-          child: CircularProgressIndicator(
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-            strokeWidth: 2,
-          ),
-        )
-            : Text(
-          "Verify OTP",
-          style: AppTheme.buttonTextLarge.copyWith(
-            color: _otpCode.length == 6
-                ? Colors.white
-                : AppTheme.textSecondary,
-          ),
-        ),
-      ),
+        );
+      },
     );
   }
 
   Widget _buildResendSection() {
+    return Container(
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.06),
+            blurRadius: 16,
+            offset: Offset(0, 4),
+            spreadRadius: 0,
+          ),
+        ],
+        border: Border.all(
+          color: Color(0xFFE5E7EB),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        children: [
+          if (_resendCountdown > 0)
+            _buildCountdownCard()
+          else if (_isInCooldown)
+            _buildCooldownCard()
+          else
+            _buildResendButton(),
+          SizedBox(height: 20),
+          Divider(
+            color: Color(0xFFE5E7EB),
+            height: 1,
+            thickness: 1,
+          ),
+          SizedBox(height: 16),
+          _buildChangePhoneButton(),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCountdownCard() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: Color(0xFFF0F9FF),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.infoBlue.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppTheme.infoBlue.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.hourglass_bottom_rounded,
+              color: AppTheme.infoBlue,
+              size: 20,
+            ),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Resend available in",
+                  style: TextStyle(
+                    color: Color(0xFF6B7280),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  _formatTime(_resendCountdown),
+                  style: TextStyle(
+                    color: AppTheme.infoBlue,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    fontFamily: 'Courier',
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Container(
+            padding: EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: BoxDecoration(
+              color: AppTheme.infoBlue.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Text(
+              "Waiting",
+              style: TextStyle(
+                color: AppTheme.infoBlue,
+                fontSize: 11,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCooldownCard() {
+    return Container(
+      padding: EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+      decoration: BoxDecoration(
+        color: AppTheme.errorRed.withOpacity(0.08),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: AppTheme.errorRed.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppTheme.errorRed.withOpacity(0.15),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(
+              Icons.lock_clock_rounded,
+              color: AppTheme.errorRed,
+              size: 20,
+            ),
+          ),
+          SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "Too many attempts",
+                  style: TextStyle(
+                    color: Color(0xFF6B7280),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+                SizedBox(height: 2),
+                Text(
+                  "Retry in ${_formatTime(_cooldownCountdown)}",
+                  style: TextStyle(
+                    color: AppTheme.errorRed,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildResendButton() {
     return Column(
       children: [
-        if (_resendCountdown > 0)
+        if (_resendAttempts > 0)
           Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: AppTheme.spaceM,
-              vertical: AppTheme.spaceS,
-            ),
+            margin: EdgeInsets.only(bottom: 12),
+            padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: AppTheme.infoBlue.withOpacity(0.2),
-              borderRadius: AppTheme.buttonRadius,
-              border: Border.all(
-                color: AppTheme.infoBlue,
-                width: 1.5,
-              ),
+              color: AppTheme.primaryBlue.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(8),
             ),
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  Icons.access_time,
-                  color: AppTheme.infoBlue,
-                  size: 20,
+                  Icons.info_rounded,
+                  color: AppTheme.primaryBlue,
+                  size: 14,
                 ),
-                SizedBox(width: AppTheme.spaceS),
+                SizedBox(width: 6),
                 Text(
-                  "Resend available in ${_formatTime(_resendCountdown)}",
-                  style: AppTheme.bodyLarge.copyWith(
-                    color: AppTheme.infoBlue,
+                  "Attempts: $_resendAttempts/$_maxResendAttempts",
+                  style: TextStyle(
+                    color: AppTheme.primaryBlue,
+                    fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
                 ),
               ],
             ),
-          )
-        else if (_isInCooldown)
-          Container(
-            padding: EdgeInsets.symmetric(
-              horizontal: AppTheme.spaceM,
-              vertical: AppTheme.spaceS,
+          ),
+        Container(
+          width: double.infinity,
+          height: 48,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: AppTheme.primaryBlue.withOpacity(0.3),
+              width: 1.5,
             ),
-            decoration: BoxDecoration(
-              color: AppTheme.errorRed.withOpacity(0.2),
-              borderRadius: AppTheme.buttonRadius,
-              border: Border.all(
-                color: AppTheme.errorRed,
-                width: 1.5,
-              ),
-            ),
-            child: Column(
-              children: [
-                Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.lock_clock,
-                      color: AppTheme.errorRed,
-                      size: 20,
-                    ),
-                    SizedBox(width: AppTheme.spaceS),
-                    Text(
-                      "Try again in ${_formatTime(_cooldownCountdown)}",
-                      style: AppTheme.bodyLarge.copyWith(
-                        color: AppTheme.errorRed,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                  ],
-                ),
-                SizedBox(height: AppTheme.spaceXS),
-                Text(
-                  "Maximum resend attempts reached",
-                  style: AppTheme.bodySmall.copyWith(
-                    color: AppTheme.errorRed,
-                  ),
-                ),
-              ],
-            ),
-          )
-        else
-          Column(
-            children: [
-              if (_resendAttempts > 0)
-                Text(
-                  "Resend attempts: $_resendAttempts/$_maxResendAttempts",
-                  style: AppTheme.bodyMedium.copyWith(
-                    color: AppTheme.textSecondary,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              SizedBox(height: AppTheme.spaceS),
-              TextButton(
-                onPressed: _isResending ? null : _resendOtp,
-                style: TextButton.styleFrom(
-                  padding: EdgeInsets.symmetric(
-                    horizontal: AppTheme.spaceL,
-                    vertical: AppTheme.spaceS,
-                  ),
-                  backgroundColor: AppTheme.primaryBlue.withOpacity(0.1),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: AppTheme.buttonRadius,
-                  ),
-                ),
+            color: AppTheme.primaryBlue.withOpacity(0.04),
+          ),
+          child: Material(
+            color: Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            child: InkWell(
+              onTap: _isResending ? null : _resendOtp,
+              borderRadius: BorderRadius.circular(12),
+              child: Center(
                 child: _isResending
                     ? Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     SizedBox(
-                      width: 16,
-                      height: 16,
+                      width: 18,
+                      height: 18,
                       child: CircularProgressIndicator(
+                        strokeWidth: 2,
                         valueColor: AlwaysStoppedAnimation<Color>(
                           AppTheme.primaryBlue,
                         ),
-                        strokeWidth: 2,
                       ),
                     ),
-                    SizedBox(width: AppTheme.spaceS),
+                    SizedBox(width: 10),
                     Text(
-                      "Resending...",
-                      style: AppTheme.labelLarge.copyWith(
+                      "Sending...",
+                      style: TextStyle(
                         color: AppTheme.primaryBlue,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ],
                 )
-                    : Text(
-                  "Resend OTP Code",
-                  style: AppTheme.labelLarge.copyWith(
-                    color: AppTheme.primaryBlue,
-                    fontWeight: FontWeight.w600,
-                  ),
+                    : Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      Icons.refresh_rounded,
+                      color: AppTheme.primaryBlue,
+                      size: 20,
+                    ),
+                    SizedBox(width: 8),
+                    Text(
+                      "Resend OTP",
+                      style: TextStyle(
+                        color: AppTheme.primaryBlue,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-            ],
-          ),
-        SizedBox(height: AppTheme.spaceS),
-        TextButton(
-          onPressed: () => Navigator.pop(context),
-          child: Text(
-            "Change Phone Number",
-            style: AppTheme.labelMedium.copyWith(
-              color: AppTheme.textSecondary,
-              decoration: TextDecoration.underline,
             ),
           ),
         ),
@@ -680,24 +1189,73 @@ class _OtpScreenState extends State<OtpScreen> with TickerProviderStateMixin {
     );
   }
 
+  Widget _buildChangePhoneButton() {
+    return TextButton(
+      onPressed: () => Navigator.pop(context),
+      style: TextButton.styleFrom(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(
+            Icons.edit_rounded,
+            color: Color(0xFF6B7280),
+            size: 18,
+          ),
+          SizedBox(width: 8),
+          Text(
+            "Change phone number",
+            style: TextStyle(
+              color: Color(0xFF6B7280),
+              fontSize: 14,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+          SizedBox(width: 4),
+          Icon(
+            Icons.arrow_forward_ios_rounded,
+            color: Color(0xFF6B7280),
+            size: 12,
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: AppTheme.surfaceWhite,
+      backgroundColor: Color(0xFFFAFAFB),
       body: SafeArea(
         child: SingleChildScrollView(
-          padding: EdgeInsets.all(AppTheme.spaceL),
+          physics: BouncingScrollPhysics(),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              _buildHeader(),
-              SizedBox(height: AppTheme.spaceXL),
-              _buildOtpFields(),
-              SizedBox(height: AppTheme.spaceL),
-              _buildVerifyButton(),
-              SizedBox(height: AppTheme.spaceL),
-              Center(child: _buildResendSection()),
-              SizedBox(height: AppTheme.spaceL),
+              // Header with back button
+              Padding(
+                padding: EdgeInsets.fromLTRB(20, 16, 20, 0),
+                child: _buildBackButton(),
+              ),
+              SizedBox(height: 24),
+
+              // Main content
+              Padding(
+                padding: EdgeInsets.symmetric(horizontal: 20),
+                child: Column(
+                  children: [
+                    _buildHeader(),
+                    SizedBox(height: 48),
+                    _buildOtpFields(),
+                    SizedBox(height: 40),
+                    _buildVerifyButton(),
+                    SizedBox(height: 40),
+                    _buildResendSection(),
+                    SizedBox(height: 30),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
