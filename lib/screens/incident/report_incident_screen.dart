@@ -142,22 +142,49 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
 
       if (response.containsKey('errors')) {
         print('⚠️ No officer on duty currently');
-        setState(() => _isLoadingOfficer = false);
+        setState(() {
+          _currentOfficer = null;
+          _assignedOfficerUid = null;  // ✅ Set to null explicitly
+        });
         return;
       }
 
       final result = response['data']?['getCurrentOfficerOnDuty'];
-      if (result['status'] == 'Success') {
+
+      if (result != null && result['status'] == 'Success') {
+        final data = result['data'];
+
+        // ✅ Validate before accessing nested properties
+        if (data != null && data['officer'] != null) {
+          final officerData = data['officer'];
+
+          setState(() {
+            _currentOfficer = data;
+            _assignedOfficerUid = officerData['uid'];
+          });
+
+          print('✅ Officer on duty: ${officerData['userAccount']['name']}');
+          print('🔑 Officer UID: $_assignedOfficerUid');
+        } else {
+          setState(() {
+            _currentOfficer = null;
+            _assignedOfficerUid = null;
+          });
+          print('⚠️ No officer data returned');
+        }
+      } else {
         setState(() {
-          _currentOfficer = result['data'];
-          final officerData = result['data']['officer'];
-          _assignedOfficerUid = officerData['uid'];  // Set UID hapa
+          _currentOfficer = null;
+          _assignedOfficerUid = null;
         });
-        print('✅ Officer on duty: ${_currentOfficer!['officer']['userAccount']['name']}');
-        print('🔑 Officer UID: $_assignedOfficerUid');  // Debug log
+        print('⚠️ No officer on duty currently');
       }
     } catch (e) {
       print('❌ Error loading officer: $e');
+      setState(() {
+        _currentOfficer = null;
+        _assignedOfficerUid = null;
+      });
     } finally {
       setState(() => _isLoadingOfficer = false);
     }
@@ -927,26 +954,41 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
       return;
     }
 
+    // 🔍 DEBUG: Check officer UID
+    print('🔍 DEBUG: _assignedOfficerUid = $_assignedOfficerUid');
+    print('🔍 DEBUG: _currentOfficer = $_currentOfficer');
+
+    if (_assignedOfficerUid == null || _assignedOfficerUid!.isEmpty) {
+      print('⚠️ WARNING: Officer UID is null/empty!');
+      _showSnackBar('Officer UID not set. Please refresh.', isError: true);
+      return;
+    }
+
     setState(() => _isSubmitting = true);
 
     try {
       final gql = GraphQLService();
+
+      final incidentDto = {
+        'title': _titleController.text.trim(),
+        'description': _descriptionController.text.trim(),
+        'type': _selectedIncidentType,
+        'location': _locationController.text.trim(),
+        'latitude': widget.userPosition.latitude,
+        'longitude': widget.userPosition.longitude,
+        'isLiveCallRequested': _isLiveCallRequested,
+        'assignedOfficerUid': _assignedOfficerUid,
+        'assignedStationUid': widget.selectedStation['uid'],
+      };
+
+      print('📊 Submitting incident DTO: $incidentDto');
+
       final response = await gql.sendAuthenticatedQuery(
         createIncidentMutation,
-        {
-          'incidentDto': {
-            'title': _titleController.text.trim(),
-            'description': _descriptionController.text.trim(),
-            'type': _selectedIncidentType,
-            'location': _locationController.text.trim(),
-            'latitude': widget.userPosition.latitude,
-            'longitude': widget.userPosition.longitude,
-            'isLiveCallRequested': _isLiveCallRequested,
-            'assignedOfficerUid': _assignedOfficerUid,
-            'assignedStationUid': widget.selectedStation['uid'],
-          },
-        },
+        {'incidentDto': incidentDto},
       );
+
+      print('📋 Response: $response');
 
       if (response.containsKey('errors')) {
         _showSnackBar('Failed to submit report', isError: true);
@@ -965,7 +1007,6 @@ class _ReportIncidentScreenState extends State<ReportIncidentScreen> {
       setState(() => _isSubmitting = false);
     }
   }
-
   // ============================================================================
   // UI HELPERS
   // ============================================================================

@@ -140,6 +140,28 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
     }
   }
 
+  // Group shifts by date, time, and duty type
+  Map<String, List<Map<String, dynamic>>> _groupShifts(List<Map<String, dynamic>> shifts) {
+    final groupedMap = <String, List<Map<String, dynamic>>>{};
+
+    for (var shift in shifts) {
+      final shiftDate = shift['shiftDate'] ?? 'N/A';
+      final startTime = shift['startTime'] ?? '06:00';
+      final endTime = shift['endTime'] ?? '14:00';
+      final dutyType = shift['shiftDutyType'] ?? '';
+
+      // Create unique key for grouping
+      final groupKey = '$shiftDate|$startTime|$endTime|$dutyType';
+
+      if (!groupedMap.containsKey(groupKey)) {
+        groupedMap[groupKey] = [];
+      }
+      groupedMap[groupKey]!.add(shift);
+    }
+
+    return groupedMap;
+  }
+
   Future<Map<String, dynamic>> _fetchShifts() async {
     setState(() => _isLoading = true);
 
@@ -405,43 +427,30 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
     }).toList();
   }
 
-  Widget _buildShiftCard(Map<String, dynamic> shift, int index) {
-    final officerName = shift['officer']?['userAccount']?['name']?.toString() ?? 'Unknown Officer';
-    final badgeNumber = shift['officer']?['badgeNumber']?.toString() ?? 'N/A';
-    final phoneNumber = shift['officer']?['userAccount']?['phoneNumber']?.toString() ?? '-';
-    final shiftDate = shift['shiftDate']?.toString() ?? 'N/A';
-    final startTime = shift['startTime']?.toString() ?? '06:00';
-    final endTime = shift['endTime']?.toString() ?? '14:00';
-    final shiftTime = shift['shiftTime'] ?? ShiftTimeEnum.MORNING;
-    final dutyDescription = shift['dutyDescription']?.toString() ?? 'No description';
-    final isPunishmentMode = shift['isPunishmentMode'] ?? false;
-    final isExcused = shift['isExcused'] ?? false;
-    final shiftStatus = _calculateShiftStatus(shift);
+  Widget _buildGroupedShiftCard(
+      String groupKey,
+      List<Map<String, dynamic>> groupedShifts,
+      int index,
+      ) {
+    // Get first shift as reference for timing and dates
+    final firstShift = groupedShifts.first;
+    final shiftDate = firstShift['shiftDate']?.toString() ?? 'N/A';
+    final startTime = firstShift['startTime']?.toString() ?? '06:00';
+    final endTime = firstShift['endTime']?.toString() ?? '14:00';
+    final shiftDutyType = firstShift['shiftDutyType'] ?? ShiftDutyTypeEnum.STATION_DUTY;
+    final dutyDescription = firstShift['dutyDescription']?.toString() ?? 'No description';
+    final shiftStatus = _calculateShiftStatus(firstShift);
     final statusColor = _getStatusColor(shiftStatus);
 
     Color getCardColor() {
-      if (isPunishmentMode) {
-        return Color(0xFFFFCDD2).withOpacity(0.08);
-      } else if (isExcused) {
-        return Color(0xFFFFECB3).withOpacity(0.08);
-      } else {
-        return statusColor.withOpacity(0.08);
-      }
+      return statusColor.withOpacity(0.08);
     }
 
     LinearGradient getIconGradient() {
-      if (isPunishmentMode) {
-        return LinearGradient(colors: [Color(0xFFFF6B6B), Color(0xFFFF5252)]);
-      } else if (isExcused) {
-        return LinearGradient(colors: [Color(0xFFFFA726), Color(0xFFFF9800)]);
-      } else {
-        return LinearGradient(colors: [statusColor.withOpacity(0.8), statusColor]);
-      }
+      return LinearGradient(colors: [statusColor.withOpacity(0.8), statusColor]);
     }
 
     IconData getStatusIcon() {
-      if (isPunishmentMode) return Icons.warning_rounded;
-      if (isExcused) return Icons.event_busy_rounded;
       if (shiftStatus.contains('COMPLETED')) return Icons.check_circle_rounded;
       if (shiftStatus.contains('ONGOING')) return Icons.play_circle_rounded;
       return Icons.schedule_rounded;
@@ -477,12 +486,12 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
             color: Colors.transparent,
             child: InkWell(
               borderRadius: BorderRadius.circular(20),
-              onTap: () => _showShiftDetails(shift),
+              onTap: () => _showShiftDetailsDialog(firstShift, groupedShifts),
               child: Padding(
                 padding: const EdgeInsets.all(20),
                 child: Column(
                   children: [
-                    // Header: Officer Info
+                    // Header: Shift Info
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
@@ -512,7 +521,7 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                officerName,
+                                'Shift Assignment',
                                 style: TextStyle(
                                   fontSize: 16,
                                   fontWeight: FontWeight.w600,
@@ -535,7 +544,7 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                                       ),
                                     ),
                                     child: Text(
-                                      badgeNumber,
+                                      '${groupedShifts.length} Officers',
                                       style: TextStyle(
                                         color: statusColor,
                                         fontSize: 12,
@@ -544,38 +553,21 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                                     ),
                                   ),
                                   const SizedBox(width: 8),
-                                  if (isPunishmentMode)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: Color(0xFFFF6B6B).withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        'PUNISHMENT',
-                                        style: TextStyle(
-                                          color: Color(0xFFFF6B6B),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                    decoration: BoxDecoration(
+                                      color: Color(0xFFFF9800).withOpacity(0.15),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Text(
+                                      shiftStatus,
+                                      style: TextStyle(
+                                        color: statusColor,
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
                                       ),
                                     ),
-                                  if (isExcused)
-                                    Container(
-                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                      decoration: BoxDecoration(
-                                        color: Color(0xFFFFA726).withOpacity(0.15),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: Text(
-                                        'EXCUSED',
-                                        style: TextStyle(
-                                          color: Color(0xFFFFA726),
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                        ),
-                                      ),
-                                    ),
+                                  ),
                                 ],
                               ),
                             ],
@@ -607,9 +599,9 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                           '$startTime - $endTime',
                         ),
                         _buildGridInfo(
-                          Icons.phone_rounded,
-                          'Phone',
-                          phoneNumber,
+                          Icons.work_rounded,
+                          'Duty Type',
+                          ShiftDutyTypeEnum.getLabel(shiftDutyType),
                         ),
                         _buildGridInfo(
                           Icons.info_rounded,
@@ -649,6 +641,102 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                           ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+
+                    // Officers List Preview
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Colors.white.withOpacity(0.5),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            'Assigned Officers (${groupedShifts.length})',
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: Color(0xFF8F9BB3),
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ListView.separated(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: groupedShifts.length > 3 ? 3 : groupedShifts.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 8),
+                            itemBuilder: (context, idx) {
+                              final officer = groupedShifts[idx]['officer'];
+                              final officerName = officer?['userAccount']?['name'] ?? 'Unknown';
+                              final badgeNumber = officer?['badgeNumber'] ?? 'N/A';
+                              return Row(
+                                children: [
+                                  Container(
+                                    width: 32,
+                                    height: 32,
+                                    decoration: BoxDecoration(
+                                      gradient: LinearGradient(
+                                        colors: [statusColor.withOpacity(0.8), statusColor],
+                                      ),
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    child: Center(
+                                      child: Text(
+                                        officerName[0].toUpperCase(),
+                                        style: TextStyle(
+                                          color: Colors.white,
+                                          fontSize: 14,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 10),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          officerName,
+                                          style: TextStyle(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Color(0xFF1A1F36),
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        Text(
+                                          badgeNumber,
+                                          style: TextStyle(
+                                            fontSize: 11,
+                                            color: Color(0xFF8F9BB3),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ],
+                              );
+                            },
+                          ),
+                          if (groupedShifts.length > 3)
+                            Padding(
+                              padding: const EdgeInsets.only(top: 8),
+                              child: Text(
+                                '+ ${groupedShifts.length - 3} more',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: statusColor,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                     ),
@@ -720,7 +808,10 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
     );
   }
 
-  void _showShiftDetails(Map<String, dynamic> shift) {
+  void _showShiftDetailsDialog(
+      Map<String, dynamic> firstShift,
+      List<Map<String, dynamic>> groupedShifts,
+      ) {
     showDialog(
       context: context,
       builder: (context) => Dialog(
@@ -772,7 +863,7 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                             ),
                           ),
                           Text(
-                            shift['officer']?['userAccount']?['name'] ?? 'Unknown',
+                            '${groupedShifts.length} Officers Assigned',
                             style: TextStyle(
                               fontSize: 14,
                               color: Color(0xFFFF9800),
@@ -786,8 +877,110 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                 ),
                 const SizedBox(height: 24),
 
-                // Details
-                ..._buildDetailItems(shift),
+                // Shift Details
+                ..._buildShiftDetailItems(firstShift),
+
+                const SizedBox(height: 24),
+
+                // Officers List
+                Text(
+                  'Assigned Officers',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: Color(0xFF1A1F36),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                ListView.separated(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  itemCount: groupedShifts.length,
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (context, index) {
+                    final shift = groupedShifts[index];
+                    final officer = shift['officer'];
+                    final officerName = officer?['userAccount']?['name'] ?? 'Unknown';
+                    final badgeNumber = officer?['badgeNumber'] ?? 'N/A';
+                    final phoneNumber = officer?['userAccount']?['phoneNumber'] ?? '-';
+                    return Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Color(0xFFF8F9FC),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Color(0xFFFF9800).withOpacity(0.2),
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                width: 40,
+                                height: 40,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [Color(0xFFFF9800), Color(0xFFFF6B35)],
+                                  ),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    officerName[0].toUpperCase(),
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      officerName,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF1A1F36),
+                                      ),
+                                    ),
+                                    Text(
+                                      badgeNumber,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: Color(0xFF8F9BB3),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Icon(Icons.phone, size: 14, color: Color(0xFF8F9BB3)),
+                              const SizedBox(width: 6),
+                              Text(
+                                phoneNumber,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Color(0xFF8F9BB3),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    );
+                  },
+                ),
 
                 const SizedBox(height: 24),
                 SizedBox(
@@ -819,10 +1012,8 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
     );
   }
 
-  List<Widget> _buildDetailItems(Map<String, dynamic> shift) {
+  List<Widget> _buildShiftDetailItems(Map<String, dynamic> shift) {
     final items = [
-      ('Officer Badge', shift['officer']?['badgeNumber']?.toString() ?? 'N/A', Icons.badge_rounded),
-      ('Officer Phone', shift['officer']?['userAccount']?['phoneNumber']?.toString() ?? '-', Icons.phone_rounded),
       ('Shift Date', shift['shiftDate']?.toString() ?? 'N/A', Icons.calendar_today_rounded),
       ('Start Time', shift['startTime']?.toString() ?? 'N/A', Icons.schedule_rounded),
       ('End Time', shift['endTime']?.toString() ?? 'N/A', Icons.schedule_rounded),
@@ -936,6 +1127,7 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
   Widget _buildStatsCard(Map<String, dynamic> data) {
     final allShifts = data['shifts'] as List<Map<String, dynamic>>;
     final filteredShifts = _filterShifts(allShifts);
+    final groupedShifts = _groupShifts(filteredShifts);
 
     return Container(
       margin: const EdgeInsets.symmetric(horizontal: 20),
@@ -1184,6 +1376,7 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                   final data = snapshot.data!;
                   final allShifts = data['shifts'] as List<Map<String, dynamic>>;
                   final filteredShifts = _filterShifts(allShifts);
+                  final groupedShifts = _groupShifts(filteredShifts);
 
                   if (allShifts.isEmpty) {
                     return Container(
@@ -1272,8 +1465,11 @@ class _CheckpointShiftsScreenState extends State<CheckpointShiftsScreen>
                           ),
                         )
                       else
-                        ...filteredShifts.asMap().entries.map((entry) {
-                          return _buildShiftCard(entry.value, entry.key);
+                        ...groupedShifts.entries.toList().asMap().entries.map((entry) {
+                          final groupKey = entry.value.key;
+                          final shifts = entry.value.value;
+                          final index = entry.key;
+                          return _buildGroupedShiftCard(groupKey, shifts, index);
                         }).toList(),
                       if (_hasMore && _searchQuery.isEmpty && _filterDutyType.isEmpty)
                         _buildLoadMoreButton(),

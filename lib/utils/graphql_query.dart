@@ -802,7 +802,6 @@ mutation AssignCheckpointShiftBulk(\$bulkCheckpointShiftDto: BulkCheckpointShift
     message
     data {
       uid
-      officerUid
       shiftDate
       shiftTime
       shiftDutyType
@@ -813,7 +812,6 @@ mutation AssignCheckpointShiftBulk(\$bulkCheckpointShiftDto: BulkCheckpointShift
       isExcused
       excuseReason
       isReassigned
-      checkpointUid
       officer {
         uid
         badgeNumber
@@ -1376,7 +1374,6 @@ const String getUnreadMessageCountQuery = '''
 // ============================================================================
 // OFFICER SHIFT QUERIES
 // ============================================================================
-
 const String getCurrentOfficerOnDutyQuery = '''
   query GetCurrentOfficerOnDuty(\$stationUid: String!) {
     getCurrentOfficerOnDuty(stationUid: \$stationUid) {
@@ -1384,7 +1381,8 @@ const String getCurrentOfficerOnDutyQuery = '''
       message
       data {
         uid
-        shiftType
+        shiftTime
+        shiftDutyType
         shiftDate
         startTime
         endTime
@@ -1398,9 +1396,9 @@ const String getCurrentOfficerOnDutyQuery = '''
             phoneNumber
           }
           station {
-          name
-          contactInfo
-         }
+            name
+            contactInfo
+          }
         }
       }
     }
@@ -1414,7 +1412,8 @@ const String getAllOfficersOnDutyNowQuery = '''
       message
       data {
         uid
-        shiftType
+        shiftTime
+        shiftDutyType
         shiftDate
         startTime
         endTime

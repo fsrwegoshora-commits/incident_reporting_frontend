@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import '../../enum/enum.dart';
 import '../../services/graphql_service.dart';
 import '../../utils/graphql_query.dart';
+import 'bulk_checkpoint_shift_form.dart';
 import 'officer_shift_form.dart';
 
 class OfficerShiftManagementScreen extends StatefulWidget {
@@ -708,6 +709,91 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                         ),
                                 ),
                         ),
+                );
+        }
+        void _showBulkCheckpointShiftForm() {
+                showGeneralDialog(
+                        context: context,
+                        barrierDismissible: true,
+                        barrierLabel: '',
+                        transitionDuration: const Duration(milliseconds: 800),
+                        pageBuilder: (context, animation1, animation2) => Container(),
+                        transitionBuilder: (context, animation1, animation2, child) {
+                                return Transform.scale(
+                                    scale: animation1.value,
+                                    child: Opacity(
+                                            opacity: animation1.value,
+                                            child: Dialog(
+                                                    backgroundColor: Colors.transparent,
+                                                    insetPadding: const EdgeInsets.all(20),
+                                                    child: Container(
+                                                            decoration: BoxDecoration(
+                                                                    color: Color(0xFFF8F9FC),
+                                                                    borderRadius: BorderRadius.circular(20),
+                                                                    boxShadow: [
+                                                                            BoxShadow(
+                                                                                    color: Color(0xFF2E5BFF).withOpacity(0.1),
+                                                                                    blurRadius: 20,
+                                                                                    offset: Offset(0, 10),
+                                                                            ),
+                                                                    ],
+                                                            ),
+                                                            child: ClipRRect(
+                                                                    borderRadius: BorderRadius.circular(20),
+                                                                    child: SizedBox(
+                                                                            height: 750,
+                                                                            child: Column(
+                                                                                    children: [
+                                                                                            Container(
+                                                                                                    height: 60,
+                                                                                                    decoration: BoxDecoration(
+                                                                                                            gradient: LinearGradient(
+                                                                                                                    colors: [Color(0xFF2E5BFF), Color(0xFF1E3A8A)],
+                                                                                                            ),
+                                                                                                    ),
+                                                                                                    child: Row(
+                                                                                                            children: [
+                                                                                                                    const SizedBox(width: 20),
+                                                                                                                    Icon(
+                                                                                                                            Icons.assignment,
+                                                                                                                            color: Colors.white,
+                                                                                                                    ),
+                                                                                                                    const SizedBox(width: 20),
+                                                                                                                    Expanded(
+                                                                                                                            child: Text(
+                                                                                                                                    'Bulk Checkpoint Assignment',
+                                                                                                                                    style: TextStyle(
+                                                                                                                                            fontSize: 16,
+                                                                                                                                            fontWeight: FontWeight.w700,
+                                                                                                                                            color: Colors.white,
+                                                                                                                                    ),
+                                                                                                                            ),
+                                                                                                                    ),
+                                                                                                                    IconButton(
+                                                                                                                            icon: const Icon(Icons.close, color: Colors.white),
+                                                                                                                            onPressed: () => Navigator.pop(context),
+                                                                                                                    ),
+                                                                                                            ],
+                                                                                                    ),
+                                                                                            ),
+                                                                                            Expanded(
+                                                                                                    child: SingleChildScrollView(
+                                                                                                            padding: const EdgeInsets.all(20),
+                                                                                                            child: BulkCheckpointShiftForm(
+                                                                                                                    stationUid: widget.stationUid,
+                                                                                                                    onSubmit: _refreshList,
+                                                                                                            ),
+                                                                                                    ),
+                                                                                            ),
+                                                                                    ],
+                                                                            ),
+                                                                    ),
+                                                            ),
+                                                    ),
+                                            ),
+                                    )
+                                );
+                                },
                 );
         }
 
@@ -1873,37 +1959,77 @@ class _OfficerShiftManagementScreenState extends State<OfficerShiftManagementScr
                                         ),
                                 ],
                         ),
-                        floatingActionButton: ScaleTransition(
-                                scale: _fabAnimation,
-                                child: Container(
-                                        decoration: BoxDecoration(
-                                                gradient: LinearGradient(
-                                                        colors: [Color(0xFF4CAF50), Color(0xFF2E7D32)],
-                                                ),
-                                                borderRadius: BorderRadius.circular(15),
-                                                boxShadow: [
-                                                        BoxShadow(
-                                                                color: Color(0xFF4CAF50).withOpacity(0.3),
-                                                                blurRadius: 10,
-                                                                offset: Offset(0, 5),
+                        floatingActionButton: Column(
+                                mainAxisAlignment: MainAxisAlignment.end,
+                                children: [
+                                        // Bulk Checkpoint Assignment Button
+                                        ScaleTransition(
+                                                scale: _fabAnimation,
+                                                child: Container(
+                                                        margin: const EdgeInsets.only(bottom: 20),
+                                                        decoration: BoxDecoration(
+                                                                gradient: LinearGradient(
+                                                                        colors: [Color(0xFF9C27B0), Color(0xFF6A1B9A)],
+                                                                ),
+                                                                borderRadius: BorderRadius.circular(15),
+                                                                boxShadow: [
+                                                                        BoxShadow(
+                                                                                color: Color(0xFF9C27B0).withOpacity(0.3),
+                                                                                blurRadius: 10,
+                                                                                offset: Offset(0, 5),
+                                                                        ),
+                                                                ],
                                                         ),
-                                                ],
-                                        ),
-                                        child: FloatingActionButton.extended(
-                                                onPressed: () => _showShiftForm(),
-                                                backgroundColor: Colors.transparent,
-                                                elevation: 0,
-                                                icon: const Icon(Icons.add, color: Colors.white),
-                                                label: Text(
-                                                        'Assign Shift',
-                                                        style: TextStyle(
-                                                                fontSize: 14,
-                                                                fontWeight: FontWeight.w600,
-                                                                color: Colors.white,
+                                                        child: FloatingActionButton.extended(
+                                                                onPressed: () => _showBulkCheckpointShiftForm(),
+                                                                backgroundColor: Colors.transparent,
+                                                                elevation: 0,
+                                                                icon: const Icon(Icons.assignment, color: Colors.white),
+                                                                label: Text(
+                                                                        'Bulk Assign',
+                                                                        style: TextStyle(
+                                                                                fontSize: 14,
+                                                                                fontWeight: FontWeight.w600,
+                                                                                color: Colors.white,
+                                                                        ),
+                                                                ),
                                                         ),
                                                 ),
                                         ),
-                                ),
+                                        // Individual Shift Assignment Button (Original)
+                                        ScaleTransition(
+                                                scale: _fabAnimation,
+                                                child: Container(
+                                                        decoration: BoxDecoration(
+                                                                gradient: LinearGradient(
+                                                                        colors: [Color(0xFF4CAF50), Color(0xFF2E7D32)],
+                                                                ),
+                                                                borderRadius: BorderRadius.circular(15),
+                                                                boxShadow: [
+                                                                        BoxShadow(
+                                                                                color: Color(0xFF4CAF50).withOpacity(0.3),
+                                                                                blurRadius: 10,
+                                                                                offset: Offset(0, 5),
+                                                                        ),
+                                                                ],
+                                                        ),
+                                                        child: FloatingActionButton.extended(
+                                                                onPressed: () => _showShiftForm(),
+                                                                backgroundColor: Colors.transparent,
+                                                                elevation: 0,
+                                                                icon: const Icon(Icons.add, color: Colors.white),
+                                                                label: Text(
+                                                                        'Assign Shift',
+                                                                        style: TextStyle(
+                                                                                fontSize: 14,
+                                                                                fontWeight: FontWeight.w600,
+                                                                                color: Colors.white,
+                                                                        ),
+                                                                ),
+                                                        ),
+                                                ),
+                                        ),
+                                ],
                         ),
                 );
         }
