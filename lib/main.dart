@@ -1,21 +1,22 @@
 import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:incident_reporting_frontend/providers/theme_provider.dart';
-import 'package:incident_reporting_frontend/screens/dashbord/dashbord_screen.dart';
-import 'package:incident_reporting_frontend/screens/notification/notifications_screen.dart';
-import 'package:incident_reporting_frontend/screens/user/register_screen.dart';
-import 'package:incident_reporting_frontend/screens/user/otp_screen.dart';
-import 'package:incident_reporting_frontend/services/graphql_service.dart';
-import 'package:incident_reporting_frontend/services/notifications_service.dart';
-import 'package:incident_reporting_frontend/services/firebase_messaging_service.dart';
-import 'package:incident_reporting_frontend/services/websocket_notification_service.dart';
-import 'package:incident_reporting_frontend/services/config_service.dart';
-import 'package:incident_reporting_frontend/utils/graphql_query.dart';
+import 'package:incident_reporting_frontend/core/theme/theme_provider.dart';
+import 'package:incident_reporting_frontend/features/home/presentation/pages/dashboard_page.dart';
+import 'package:incident_reporting_frontend/features/notification/presentation/pages/notifications_page.dart';
+import 'package:incident_reporting_frontend/features/auth/presentation/pages/register_page.dart';
+import 'package:incident_reporting_frontend/features/auth/presentation/pages/otp_page.dart';
+import 'package:incident_reporting_frontend/core/network/api_service.dart';
+import 'package:incident_reporting_frontend/features/notification/data/services/notifications_service.dart';
+import 'package:incident_reporting_frontend/features/notification/data/services/firebase_messaging_service.dart';
+import 'package:incident_reporting_frontend/core/network/websocket_service.dart';
+import 'package:incident_reporting_frontend/core/config/config_service.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'firebase_options.dart';
-import 'theme/app_theme.dart';
+import 'package:incident_reporting_frontend/core/theme/app_theme.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,14 +29,18 @@ void main() async {
     print("❌ Error initializing ConfigService: $e");
   }
 
-  // Initialize Firebase
-  try {
-    await Firebase.initializeApp(
-      options: DefaultFirebaseOptions.currentPlatform,
-    );
-    print("✅ Firebase initialized");
-  } catch (e) {
-    print("❌ Firebase initialization error: $e");
+  // Initialize Firebase (Android & iOS only — not supported on Windows)
+  if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
+      print("✅ Firebase initialized");
+    } catch (e) {
+      print("❌ Firebase initialization error: $e");
+    }
+  } else {
+    print("ℹ️ Firebase skipped on ${kIsWeb ? 'Web' : Platform.operatingSystem}");
   }
 
   runApp(const SmartIncidentApp());
@@ -60,7 +65,7 @@ class SmartIncidentApp extends StatelessWidget {
             debugShowCheckedModeBanner: false,
             theme: AppTheme.lightTheme,
             darkTheme: AppTheme.darkTheme,
-            themeMode: themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+            themeMode: themeProvider.themeMode,
             home: const AuthWrapper(),
             routes: {
               '/dashboard': (context) => DashboardScreen(),
@@ -85,7 +90,7 @@ class AuthWrapper extends StatefulWidget {
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  final GraphQLService gql = GraphQLService();
+  final ApiService _api = ApiService();
   late FirebaseMessagingService _firebaseMessagingService;
   late WebSocketNotificationsService _webSocketService;
   bool _isChecking = true;
@@ -97,6 +102,14 @@ class _AuthWrapperState extends State<AuthWrapper> {
     _firebaseMessagingService = FirebaseMessagingService();
     _webSocketService = WebSocketNotificationsService();
     _checkAuthAndInitialize();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Sync status bar / nav bar colours with the current theme on every hot restart
+    // and whenever the provider rebuilds this widget.
+    Provider.of<ThemeProvider>(context, listen: false).applySystemChrome();
   }
 
   Future<void> _checkAuthAndInitialize() async {
@@ -129,27 +142,17 @@ class _AuthWrapperState extends State<AuthWrapper> {
         print("🔍 Backend: ${ConfigService().displayAddress}");
 
         if (userUid == null) {
-          print("⚠️ User UID not found, fetching from GraphQL...");
+          print("⚠️ User UID not found, fetching from API...");
           try {
-            const String meQuery = '''
-              query {
-                me {
-                  data {
-                    uid
-                  }
-                }
-              }
-            ''';
-
-            final response = await gql.sendAuthenticatedQuery(meQuery, {});
-            final user = response['data']?['me']?['data'];
+            final response = await _api.getMe();
+            final user = response['data'];
 
             if (user != null && user['uid'] != null) {
               userUid = user['uid'];
               await prefs.setString('userUid', userUid!);
-              print("✅ Saved user UID from GraphQL: $userUid");
+              print("✅ Saved user UID from API: $userUid");
             } else {
-              print("❌ Could not get user UID from GraphQL response");
+              print("❌ Could not get user UID from API response");
             }
           } catch (e) {
             print("❌ Error fetching user UID: $e");
@@ -201,12 +204,12 @@ class _AuthWrapperState extends State<AuthWrapper> {
         return false;
       }
 
-      final response = await gql.sendQuery(validateTokenQuery, {"token": token}).timeout(
+      final response = await _api.validateToken(token).timeout(
         const Duration(seconds: 8),
-        onTimeout: () => {'data': {'validateToken': {'data': false}}},
+        onTimeout: () => {'status': 'Error', 'data': false},
       );
 
-      final isValid = response['data']?['validateToken']?['data'] == true;
+      final isValid = response['status'] == 'Success' && response['data'] == true;
       return isValid;
     } catch (e) {
       print("❌ Token validation error: $e");

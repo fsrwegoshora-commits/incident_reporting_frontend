@@ -1,0 +1,1086 @@
+import 'dart:async';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:geocoding/geocoding.dart';
+import 'package:incident_reporting_frontend/core/network/api_service.dart';
+import 'package:incident_reporting_frontend/core/theme/app_theme.dart';
+import 'package:incident_reporting_frontend/core/widgets/widgets.dart';
+
+class RegisterTrafficCheckpointTab extends StatefulWidget {
+  final Map<String, dynamic>? existingCheckpoint;
+  final String? preSelectedStationUid;
+  final VoidCallback? onSubmit;
+
+  const RegisterTrafficCheckpointTab({
+    super.key,
+    this.existingCheckpoint,
+    this.preSelectedStationUid,
+    this.onSubmit,
+  });
+
+  @override
+  _RegisterTrafficCheckpointTabState createState() => _RegisterTrafficCheckpointTabState();
+}
+
+class _RegisterTrafficCheckpointTabState extends State<RegisterTrafficCheckpointTab> {
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _contactPhoneController = TextEditingController();
+  final _coverageRadiusController = TextEditingController();
+  final _latitudeController = TextEditingController();
+  final _longitudeController = TextEditingController();
+  final _addressController = TextEditingController();
+  final _locationSearchController = TextEditingController();
+
+  String? _selectedSupervisorUid;
+  String? _selectedStationUid;
+  String? _selectedDepartmentUid;
+  bool _isActive = true;
+  bool _isLoading = false;
+  bool _isAssigningSupervisor = false;
+  bool _isSearchingLocation = false;
+  bool _isSearchingLocations = false;
+  bool _isLoadingSupervisors = false;
+
+  List<Map<String, dynamic>> _policeOfficers = [];
+  List<Map<String, dynamic>> _policeStations = [];
+  List<Map<String, dynamic>> _departments = [];
+  List<Location> _locationSuggestions = [];
+
+  double? _latitude;
+  double? _longitude;
+  String? _locationSource;
+  String? _savedCheckpointUid;
+
+  Timer? _locationSearchDebounce;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetchData();
+    _requestLocationPermission();
+    if (widget.existingCheckpoint != null) {
+      _initializeExistingData();
+    } else if (widget.preSelectedStationUid != null) {
+      _selectedStationUid = widget.preSelectedStationUid;
+      // ✅ FIX: Use null coalescing to handle String?
+      _fetchPoliceOfficersByStation(widget.preSelectedStationUid ?? '');
+    }
+  }
+
+  Future<void> _requestLocationPermission() async {
+    bool locationService = await Geolocator.isLocationServiceEnabled();
+    if (!locationService) {
+      _showErrorSnackBar('Please enable location services');
+      return;
+    }
+
+    LocationPermission permission = await Geolocator.checkPermission();
+    if (permission == LocationPermission.denied) {
+      permission = await Geolocator.requestPermission();
+      if (permission == LocationPermission.deniedForever) {
+        _showErrorSnackBar('Location permissions are permanently denied');
+      }
+    }
+  }
+
+  void _initializeExistingData() {
+    final checkpoint = widget.existingCheckpoint!;
+    _nameController.text = checkpoint['name'] ?? '';
+    _contactPhoneController.text = checkpoint['contactPhone'] ?? '';
+    _coverageRadiusController.text = (checkpoint['coverageRadiusKm'] ?? '').toString();
+    _latitudeController.text = (checkpoint['location']?['latitude'] ?? '').toString();
+    _longitudeController.text = (checkpoint['location']?['longitude'] ?? '').toString();
+    _addressController.text = checkpoint['location']?['address'] ?? '';
+    _selectedSupervisorUid = checkpoint['supervisingOfficer']?['uid']?.toString();
+    _selectedStationUid = checkpoint['parentStation']?['uid']?.toString();
+    _selectedDepartmentUid = checkpoint['department']?['uid']?.toString();
+    _isActive = checkpoint['active'] ?? true;
+    _savedCheckpointUid = checkpoint['uid']?.toString();
+
+    _latitude = checkpoint['location']?['latitude']?.toDouble();
+    _longitude = checkpoint['location']?['longitude']?.toDouble();
+    _locationSource = "existing";
+
+    // ✅ Fetch supervisors from existing station
+    if (_selectedStationUid != null) {
+      _fetchPoliceOfficersByStation(_selectedStationUid!);
+    }
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _contactPhoneController.dispose();
+    _coverageRadiusController.dispose();
+    _latitudeController.dispose();
+    _longitudeController.dispose();
+    _addressController.dispose();
+    _locationSearchController.dispose();
+    _locationSearchDebounce?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetchData() async {
+    setState(() => _isLoading = true);
+    try {
+      await Future.wait([
+        _fetchPoliceStations(),
+        _fetchDepartments(),
+      ]);
+    } catch (e) {
+      _showErrorSnackBar("Error loading data: $e");
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  // ✅ NEW: Fetch supervisors from specific station
+  Future<void> _fetchPoliceOfficersByStation(String stationUid) async {
+    if (stationUid.isEmpty) return;
+
+    setState(() => _isLoadingSupervisors = true);
+    final api = ApiService();
+    try {
+      final response = await api.getPoliceOfficersByStation(stationUid, page: 0, size: 100);
+
+      print("📥 Officers by station response: $response");
+
+      setState(() {
+        _policeOfficers = List<Map<String, dynamic>>.from(response['data'] ?? []);
+
+        // ✅ Auto-select first supervisor if available
+        if (_selectedSupervisorUid == null && _policeOfficers.isNotEmpty && widget.existingCheckpoint == null) {
+          _selectedSupervisorUid = _policeOfficers.first['uid']?.toString();
+        }
+
+        print("✅ Loaded ${_policeOfficers.length} supervisors from station");
+      });
+    } catch (e) {
+      print("❌ Error fetching officers by station: $e");
+      _showErrorSnackBar("Error loading supervisors: $e");
+    } finally {
+      setState(() => _isLoadingSupervisors = false);
+    }
+  }
+
+  Future<void> _fetchPoliceStations() async {
+    final api = ApiService();
+    try {
+      final response = await api.getPoliceStations(page: 0, size: 100, isActive: true);
+      setState(() {
+        _policeStations = List<Map<String, dynamic>>.from(response['data'] ?? []);
+        if (_selectedStationUid == null && _policeStations.isNotEmpty && widget.existingCheckpoint == null && widget.preSelectedStationUid == null) {
+          _selectedStationUid = _policeStations.first['uid']?.toString();
+        }
+      });
+    } catch (e) {
+      print("Error fetching police stations: $e");
+    }
+  }
+
+  Future<void> _fetchDepartments() async {
+    final api = ApiService();
+    try {
+      final response = await api.getDepartments(page: 0, size: 100);
+      setState(() {
+        // ✅ Filter for TRAFFIC departments only
+        _departments = List<Map<String, dynamic>>.from(response['data'] ?? [])
+            .where((dept) {
+          final type = dept['type']?.toString().toUpperCase() ?? '';
+          return type.contains('TRAFFIC');
+        })
+            .toList();
+
+        if (_selectedDepartmentUid == null && _departments.isNotEmpty && widget.existingCheckpoint == null) {
+          _selectedDepartmentUid = _departments.first['uid']?.toString();
+        }
+      });
+    } catch (e) {
+      print("Error fetching departments: $e");
+    }
+  }
+
+  Future<void> _getCurrentLocation() async {
+    setState(() => _isSearchingLocation = true);
+    try {
+      Position position = await Geolocator.getCurrentPosition(
+        desiredAccuracy: LocationAccuracy.high,
+      );
+      _latitude = position.latitude;
+      _longitude = position.longitude;
+      _locationSource = "current";
+
+      _latitudeController.text = _latitude!.toStringAsFixed(6);
+      _longitudeController.text = _longitude!.toStringAsFixed(6);
+
+      if (!kIsWeb && !Platform.isWindows && !Platform.isLinux) {
+        List<Placemark> placemarks = await placemarkFromCoordinates(
+          position.latitude,
+          position.longitude,
+        );
+        if (placemarks.isNotEmpty) {
+          Placemark place = placemarks[0];
+          _addressController.text = [
+            place.street,
+            place.subLocality,
+            place.locality,
+            place.administrativeArea,
+          ].where((e) => e != null && e.isNotEmpty).join(', ');
+        }
+      } else {
+        _addressController.text = '${position.latitude.toStringAsFixed(6)}, ${position.longitude.toStringAsFixed(6)}';
+      }
+
+      if (mounted) {
+        setState(() {});
+        _showSuccessSnackBar('Current location fetched successfully');
+      }
+    } catch (e) {
+      if (mounted) {
+        _showErrorSnackBar('Error getting location: $e');
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSearchingLocation = false);
+      }
+    }
+  }
+
+  void _showLocationPickerDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.blue.shade50, Colors.white],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(20),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [Colors.blue.shade600, Colors.blue.shade400],
+                      ),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.location_searching, color: Colors.white),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      'Choose Location Method',
+                      style: GoogleFonts.poppins(
+                        fontSize: 18,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.grey.shade800,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 20),
+              _buildLocationOption(
+                icon: Icons.gps_fixed,
+                title: 'Current Location',
+                subtitle: 'Use your device\'s GPS',
+                colors: [Colors.blue.shade600, Colors.blue.shade400],
+                onTap: () {
+                  Navigator.pop(context);
+                  _getCurrentLocation();
+                },
+              ),
+              const SizedBox(height: 12),
+              _buildLocationOption(
+                icon: Icons.search,
+                title: 'Search Location',
+                subtitle: 'Search by name (e.g., Dar es Salaam)',
+                colors: [Colors.green.shade600, Colors.green.shade400],
+                onTap: () {
+                  Navigator.pop(context);
+                  _showSearchLocationDialog();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _showSearchLocationDialog() {
+    showDialog(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return Dialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+            child: Container(
+              height: MediaQuery.of(context).size.height * 0.8,
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Colors.green.shade50, Colors.white],
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          gradient: LinearGradient(
+                            colors: [Colors.green.shade600, Colors.green.shade400],
+                          ),
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(Icons.search, color: Colors.white),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Search Location',
+                          style: GoogleFonts.poppins(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.grey.shade800,
+                          ),
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () => Navigator.pop(context),
+                        icon: const Icon(Icons.close),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'Enter location name to search',
+                    style: GoogleFonts.poppins(
+                      fontSize: 13,
+                      color: Colors.grey.shade600,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  TextField(
+                    controller: _locationSearchController,
+                    style: GoogleFonts.poppins(fontSize: 16),
+                    decoration: InputDecoration(
+                      hintText: 'e.g., Kariakoo, Dar es Salaam',
+                      hintStyle: GoogleFonts.poppins(color: Colors.grey.shade400),
+                      prefixIcon: const Icon(Icons.location_on),
+                      border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+                      filled: true,
+                      fillColor: Colors.white,
+                    ),
+                    onChanged: (value) {
+                      if (_locationSearchDebounce?.isActive ?? false) {
+                        _locationSearchDebounce!.cancel();
+                      }
+                      _locationSearchDebounce = Timer(const Duration(milliseconds: 800), () {
+                        if (value.isNotEmpty) {
+                          _performLocationSearch(value, setDialogState);
+                        } else {
+                          setDialogState(() {
+                            _locationSuggestions = [];
+                          });
+                        }
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 16),
+                  if (_isSearchingLocations)
+                    const Center(
+                      child: Column(
+                        children: [
+                          CircularProgressIndicator(),
+                          SizedBox(height: 12),
+                          Text('Searching locations...'),
+                        ],
+                      ),
+                    )
+                  else if (_locationSuggestions.isNotEmpty)
+                    Expanded(
+                      child: ListView.separated(
+                        itemCount: _locationSuggestions.length,
+                        separatorBuilder: (context, index) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          return _buildLocationSuggestionItem(_locationSuggestions[index], setDialogState);
+                        },
+                      ),
+                    )
+                  else if (_locationSearchController.text.isNotEmpty)
+                      Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.location_off, size: 48, color: Colors.grey.shade300),
+                              const SizedBox(height: 12),
+                              Text('No locations found', style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey.shade500)),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      Expanded(
+                        child: Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.search_off, size: 48, color: Colors.grey.shade300),
+                              const SizedBox(height: 12),
+                              Text('Search for locations', style: GoogleFonts.poppins(fontSize: 16, color: Colors.grey.shade500)),
+                            ],
+                          ),
+                        ),
+                      ),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildLocationSuggestionItem(Location location, StateSetter setDialogState) {
+    final coordsText = 'Lat: ${location.latitude.toStringAsFixed(4)}, Long: ${location.longitude.toStringAsFixed(4)}';
+    return FutureBuilder<List<Placemark>>(
+      future: (!kIsWeb && !Platform.isWindows && !Platform.isLinux)
+          ? placemarkFromCoordinates(location.latitude, location.longitude)
+          : Future.value([]),
+      builder: (context, snapshot) {
+        final address = snapshot.hasData && snapshot.data!.isNotEmpty
+            ? _formatPlacemark(snapshot.data!.first)
+            : coordsText;
+
+        return Material(
+          color: Colors.transparent,
+          child: InkWell(
+            onTap: () async {
+              Navigator.pop(context);
+              await _selectLocationFromSuggestion(location);
+            },
+            child: Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.grey.shade200),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: Colors.green.shade100,
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(Icons.location_on, color: Colors.green.shade600, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(_locationSearchController.text,
+                            style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+                        const SizedBox(height: 4),
+                        Text(address,
+                            style: GoogleFonts.poppins(fontSize: 14, color: Colors.grey.shade600),
+                            maxLines: 2, overflow: TextOverflow.ellipsis),
+                        const SizedBox(height: 4),
+                        Text('Lat: ${location.latitude.toStringAsFixed(6)}, Long: ${location.longitude.toStringAsFixed(6)}',
+                            style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade500)),
+                      ],
+                    ),
+                  ),
+                  Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey.shade400),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  String _formatPlacemark(Placemark placemark) {
+    return [
+      placemark.street,
+      placemark.subLocality,
+      placemark.locality,
+      placemark.administrativeArea,
+      placemark.country
+    ].where((e) => e != null && e.isNotEmpty).join(', ');
+  }
+
+  Future<void> _selectLocationFromSuggestion(Location location) async {
+    setState(() => _isSearchingLocation = true);
+    try {
+      _latitude = location.latitude;
+      _longitude = location.longitude;
+      _locationSource = "search";
+
+      _latitudeController.text = _latitude!.toStringAsFixed(6);
+      _longitudeController.text = _longitude!.toStringAsFixed(6);
+
+      List<Placemark> placemarks = await placemarkFromCoordinates(location.latitude, location.longitude);
+
+      if (placemarks.isNotEmpty) {
+        _addressController.text = _formatPlacemark(placemarks[0]);
+      } else {
+        _addressController.text = 'Lat: ${location.latitude.toStringAsFixed(6)}, Long: ${location.longitude.toStringAsFixed(6)}';
+      }
+
+      if (mounted) {
+        setState(() {});
+        _showSuccessSnackBar('Location selected successfully');
+      }
+    } catch (e) {
+      if (mounted) _showErrorSnackBar('Error setting location: $e');
+    } finally {
+      if (mounted) setState(() => _isSearchingLocation = false);
+    }
+  }
+
+  Future<void> _performLocationSearch(String query, StateSetter setDialogState) async {
+    if (query.isEmpty) {
+      setDialogState(() => _locationSuggestions = []);
+      return;
+    }
+
+    setDialogState(() {
+      _isSearchingLocations = true;
+      _locationSuggestions = [];
+    });
+
+    try {
+      if (kIsWeb || Platform.isWindows || Platform.isLinux) {
+        setDialogState(() => _isSearchingLocations = false);
+        return;
+      }
+      List<Location> locations = await locationFromAddress(query);
+      setDialogState(() {
+        _locationSuggestions = locations;
+        _isSearchingLocations = false;
+      });
+    } catch (e) {
+      setDialogState(() {
+        _locationSuggestions = [];
+        _isSearchingLocations = false;
+      });
+      if (mounted) _showErrorSnackBar('Error searching locations: $e');
+    }
+  }
+
+  Widget _buildLocationOption({
+    required IconData icon,
+    required String title,
+    required String subtitle,
+    required List<Color> colors,
+    required VoidCallback onTap,
+  }) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: Colors.grey.shade200),
+          ),
+          child: Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: colors),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, color: Colors.white, size: 24),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+                    const SizedBox(height: 4),
+                    Text(subtitle, style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade600)),
+                  ],
+                ),
+              ),
+              Icon(Icons.arrow_forward_ios, size: 16, color: Colors.grey.shade400),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildLocationInfoCard() {
+    if (_latitude == null || _longitude == null) return const SizedBox.shrink();
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 20),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [Colors.green.shade50, Colors.blue.shade50],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.green.shade200),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(color: Colors.green.shade100, shape: BoxShape.circle),
+                child: Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Location Set Successfully',
+                    style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: Colors.grey.shade800)),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(12)),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Lat: ${_latitude!.toStringAsFixed(6)}, Long: ${_longitude!.toStringAsFixed(6)}',
+                    style: GoogleFonts.poppins(fontSize: 13, color: Colors.grey.shade800)),
+                const SizedBox(height: 4),
+                Text('Source: ${_locationSource ?? 'Manual'}',
+                    style: GoogleFonts.poppins(fontSize: 12, color: Colors.grey.shade600)),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ CRITICAL FIX: stationUid + supervisor assignment
+  Future<void> _submit() async {
+    if (!_formKey.currentState!.validate()) return;
+
+    if (_latitude == null || _longitude == null) {
+      _showErrorSnackBar('Please set location first');
+      return;
+    }
+
+    if (_selectedDepartmentUid == null) {
+      _showErrorSnackBar('Please select a TRAFFIC department');
+      return;
+    }
+
+    if (_selectedStationUid == null) {
+      _showErrorSnackBar('Please select a police station');
+      return;
+    }
+
+    setState(() => _isLoading = true);
+    final api = ApiService();
+
+    try {
+      final dto = {
+        if (widget.existingCheckpoint != null) "uid": widget.existingCheckpoint!['uid'],
+        "name": _nameController.text.trim(),
+        "contactInfo": _contactPhoneController.text.trim(),
+        "coverageRadiusKm": double.tryParse(_coverageRadiusController.text) ?? 0.0,
+        "policeStationUid": _selectedStationUid,
+        "departmentUid": _selectedDepartmentUid,
+        "active": _isActive,
+        "location": {
+          "latitude": double.tryParse(_latitudeController.text) ?? 0.0,
+          "longitude": double.tryParse(_longitudeController.text) ?? 0.0,
+          "address": _addressController.text.trim(),
+        }
+      };
+
+      print("📡 Saving checkpoint with stationUid: $dto");
+
+      final response = await api.saveTrafficCheckpoint(dto);
+
+      print("📥 Backend response: $response");
+
+      if (!mounted) return;
+
+      final isSuccess = response['status'] == 'Success';
+      final message = response['message'] ?? (isSuccess ? "Checkpoint saved successfully" : "Failed to save");
+
+      if (!isSuccess) {
+        _showErrorSnackBar(message);
+        setState(() => _isLoading = false);
+        return;
+      }
+
+      // ✅ Get saved checkpoint UID
+      _savedCheckpointUid = response['data']?['uid']?.toString();
+
+      // ✅ Step 2: Assign supervisor if selected & not editing
+      if (_selectedSupervisorUid != null && _savedCheckpointUid != null && widget.existingCheckpoint == null) {
+        setState(() => _isAssigningSupervisor = true);
+
+        final assignResponse = await api.assignSupervisor(_savedCheckpointUid!, _selectedSupervisorUid!);
+
+        print("📥 Supervisor assignment response: $assignResponse");
+
+        final assignSuccess = assignResponse['status'] == 'Success';
+
+        if (assignSuccess) {
+          _showSuccessSnackBar('Checkpoint created & supervisor assigned! ✅');
+        } else {
+          _showSuccessSnackBar('Checkpoint saved (supervisor assignment pending)');
+        }
+      } else if (widget.existingCheckpoint != null && _selectedSupervisorUid != null) {
+        // ✅ Step 2B: For editing - change supervisor
+        setState(() => _isAssigningSupervisor = true);
+
+        final checkpointUid = _savedCheckpointUid ?? widget.existingCheckpoint!['uid'];
+        final changeResponse = await api.changeSupervisor(checkpointUid, _selectedSupervisorUid!);
+
+        print("📥 Supervisor change response: $changeResponse");
+
+        final changeSuccess = changeResponse['status'] == 'Success';
+
+        if (changeSuccess) {
+          _showSuccessSnackBar('Checkpoint updated & supervisor changed! ✅');
+        } else {
+          _showSuccessSnackBar('Checkpoint updated');
+        }
+      } else {
+        _showSuccessSnackBar(message);
+      }
+
+      await Future.delayed(const Duration(milliseconds: 500));
+
+      if (mounted) {
+        if (widget.onSubmit != null) {
+          widget.onSubmit!();
+        }
+        Navigator.of(context).pop(true);
+      }
+    } catch (e) {
+      print("❌ Error: $e");
+      if (mounted) {
+        _showErrorSnackBar("Error saving checkpoint: $e");
+        setState(() => _isLoading = false);
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _isAssigningSupervisor = false;
+        });
+      }
+    }
+  }
+
+  void _showErrorSnackBar(String message) {
+    if (mounted) AppSnackbar.error(context, message);
+  }
+
+  void _showSuccessSnackBar(String message) {
+    if (mounted) AppSnackbar.success(context, message);
+  }
+
+  bool get isEditing => widget.existingCheckpoint != null;
+
+  @override
+  Widget build(BuildContext context) {
+    if (_isLoading || _isAssigningSupervisor) {
+      return SizedBox(
+        height: 300,
+        child: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const CircularProgressIndicator(color: AppTheme.primaryBlue),
+              const SizedBox(height: AppTheme.spaceM),
+              Text(
+                _isAssigningSupervisor ? 'Assigning supervisor...' : 'Saving checkpoint...',
+                style: AppTheme.bodyMedium,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return SingleChildScrollView(
+      physics: const ClampingScrollPhysics(),
+      padding: const EdgeInsets.all(AppTheme.spaceL),
+      child: Form(
+        key: _formKey,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+              FormHeaderCard(
+                icon: Icons.traffic_outlined,
+                title: isEditing ? "Edit Traffic Checkpoint" : "Register Traffic Checkpoint",
+                subtitle: "Fill in all required checkpoint information below",
+              ),
+              const SizedBox(height: AppTheme.spaceM),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(AppTheme.spaceL),
+                decoration: AppTheme.elevatedCardDecoration,
+                child: Column(
+                  children: [
+                    TextFormField(
+                      controller: _nameController,
+                      style: AppTheme.bodyLarge,
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Checkpoint Name",
+                        prefixIcon: Icons.location_on,
+                      ),
+                      validator: (value) => value!.isEmpty ? "Name required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    TextFormField(
+                      controller: _contactPhoneController,
+                      style: AppTheme.bodyLarge,
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Contact Phone",
+                        prefixIcon: Icons.phone,
+                      ),
+                      validator: (value) => value!.isEmpty ? "Phone required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    TextFormField(
+                      controller: _coverageRadiusController,
+                      style: AppTheme.bodyLarge,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Coverage Radius (km)",
+                        prefixIcon: Icons.radio,
+                      ),
+                      validator: (value) => value!.isEmpty ? "Required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceL),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text("Station Location", style: AppTheme.titleSmall),
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    AppButton(
+                      label: _isSearchingLocation ? 'Searching...' : 'Set Location',
+                      icon: Icons.add_location_alt_outlined,
+                      onPressed: _isSearchingLocation ? () {} : _showLocationPickerDialog,
+                      isLoading: _isSearchingLocation,
+                      variant: ButtonVariant.neutral,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    _buildLocationInfoCard(),
+                    const SizedBox(height: AppTheme.spaceM),
+                    TextFormField(
+                      controller: _latitudeController,
+                      style: AppTheme.bodyLarge,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Latitude",
+                        prefixIcon: Icons.my_location,
+                      ),
+                      validator: (value) => value!.isEmpty ? "Required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    TextFormField(
+                      controller: _longitudeController,
+                      style: AppTheme.bodyLarge,
+                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Longitude",
+                        prefixIcon: Icons.my_location,
+                      ),
+                      validator: (value) => value!.isEmpty ? "Required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    TextFormField(
+                      controller: _addressController,
+                      style: AppTheme.bodyLarge,
+                      maxLines: 2,
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Address",
+                        prefixIcon: Icons.home,
+                      ),
+                      validator: (value) => value!.isEmpty ? "Required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceL),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text("Assignment Details", style: AppTheme.titleSmall),
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    widget.preSelectedStationUid != null
+                        ? TextFormField(
+                      initialValue: _policeStations
+                          .firstWhere(
+                            (s) => s['uid'] == widget.preSelectedStationUid,
+                        orElse: () => {'name': 'Unknown'},
+                      )['name']
+                          ?.toString(),
+                      style: AppTheme.bodyLarge,
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Police Station",
+                        prefixIcon: Icons.local_police,
+                      ),
+                      enabled: false,
+                    )
+                        : DropdownButtonFormField<String>(
+                      value: _selectedStationUid,
+                      style: AppTheme.bodyLarge,
+                      items: _policeStations.map((station) {
+                        return DropdownMenuItem<String>(
+                          value: station['uid']?.toString(),
+                          child: Text(station['name']?.toString() ?? 'Unknown', style: AppTheme.bodyLarge),
+                        );
+                      }).toList(),
+                      onChanged: (value) {
+                        setState(() => _selectedStationUid = value);
+                        // ✅ Fetch supervisors when station changes
+                        if (value != null) {
+                          _fetchPoliceOfficersByStation(value);
+                        }
+                      },
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Police Station",
+                        prefixIcon: Icons.local_police,
+                      ),
+                      validator: (value) => value == null ? "Required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    // ✅ Supervisors dropdown - Loads from selected station
+                    if (_isLoadingSupervisors)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          border: Border.all(color: AppTheme.borderColor),
+                          borderRadius: AppTheme.cardRadius,
+                        ),
+                        child: Center(
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF2E5BFF)),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Text(
+                                'Loading supervisors...',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  color: Color(0xFF8F9BB3),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )
+                    else
+                      DropdownButtonFormField<String>(
+                        value: _selectedSupervisorUid,
+                        style: AppTheme.bodyLarge,
+                        items: _policeOfficers.map((officer) {
+                          return DropdownMenuItem<String>(
+                            value: officer['uid']?.toString(),
+                            child: Text(
+                              '${officer['userAccount']?['name']?.toString() ?? 'Unknown'} (${officer['badgeNumber'] ?? 'N/A'})',
+                              style: AppTheme.bodyLarge,
+                            ),
+                          );
+                        }).toList(),
+                        onChanged: (value) => setState(() => _selectedSupervisorUid = value),
+                        decoration: AppTheme.getInputDecoration(
+                          labelText: "Supervising Officer",
+                          prefixIcon: Icons.person,
+                        ),
+                      ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    DropdownButtonFormField<String>(
+                      value: _selectedDepartmentUid,
+                      style: AppTheme.bodyLarge,
+                      items: _departments.map((dept) {
+                        return DropdownMenuItem<String>(
+                          value: dept['uid']?.toString(),
+                          child: Text(dept['name']?.toString() ?? 'Unknown', style: AppTheme.bodyLarge),
+                        );
+                      }).toList(),
+                      onChanged: (value) => setState(() => _selectedDepartmentUid = value),
+                      decoration: AppTheme.getInputDecoration(
+                        labelText: "Department (TRAFFIC only)",
+                        prefixIcon: Icons.domain,
+                      ),
+                      validator: (value) => value == null ? "Required" : null,
+                    ),
+                    const SizedBox(height: AppTheme.spaceM),
+                    Container(
+                      decoration: BoxDecoration(
+                        border: Border.all(color: AppTheme.borderColor),
+                        borderRadius: AppTheme.cardRadius,
+                      ),
+                      child: CheckboxListTile(
+                        value: _isActive,
+                        onChanged: (value) => setState(() => _isActive = value ?? true),
+                        title: Text("Active Checkpoint", style: AppTheme.bodyLarge),
+                        controlAffinity: ListTileControlAffinity.leading,
+                        shape: RoundedRectangleBorder(borderRadius: AppTheme.cardRadius),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: AppTheme.spaceM),
+              AppButton(
+                label: isEditing ? 'Update Checkpoint' : 'Register Checkpoint',
+                icon: Icons.save_outlined,
+                onPressed: _submit,
+                isLoading: _isLoading,
+              ),
+            ],
+          ),
+        ),
+      );
+  }
+}
